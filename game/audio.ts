@@ -2,8 +2,11 @@ import { clamp } from './mathx';
 import { WeaponId } from './weapons';
 
 /**
- * Everything is synthesised with WebAudio — no sample downloads, so audio never delays
- * the first frame. Volume is distance-scaled by the caller.
+ * Sound effects are synthesised with WebAudio so audio never delays the first
+ * frame — but when the CC0 samples in public/assets/audio have downloaded, the
+ * one-shots (guns, punches, footsteps, crashes, siren, engine timbre) come from
+ * recordings instead, and the synth stays as the offline fallback. Volume is
+ * distance-scaled by the caller.
  */
 export class GameAudio {
   private ctx: AudioContext | null = null;
@@ -11,15 +14,32 @@ export class GameAudio {
   private sfx!: GainNode;
   private music!: GainNode;
   private noise!: AudioBuffer;
+  /** Fetched at boot, decoded once the context exists (it needs a user gesture). */
+  private raw: Record<string, ArrayBuffer> = {};
+  private buf: Record<string, AudioBuffer> = {};
+  private stepPick = 0;
   private engineOsc: OscillatorNode | null = null;
   private engineOsc2: OscillatorNode | null = null;
   private engineGain: GainNode | null = null;
   private engineFilter: BiquadFilterNode | null = null;
+  private engineSrc: AudioBufferSourceNode | null = null;
+  private engineSampleGain: GainNode | null = null;
   private sirenOsc: OscillatorNode | null = null;
+  private sirenSrc: AudioBufferSourceNode | null = null;
   private sirenGain: GainNode | null = null;
   private sirenT = 0;
   private ambientGain: GainNode | null = null;
   ready = false;
+
+  /** Fetch the sample files at boot. Missing files just keep the synth voice. */
+  async queueSamples(files: Record<string, string>): Promise<void> {
+    await Promise.all(Object.entries(files).map(async ([key, url]) => {
+      try {
+        const r = await fetch(url);
+        if (r.ok) this.raw[key] = await r.arrayBuffer();
+      } catch { /* offline: synth covers it */ }
+    }));
+  }
 
   init(): void {
     if (this.ctx) {
@@ -45,6 +65,11 @@ export class GameAudio {
     const d = this.noise.getChannelData(0);
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
     this.ready = true;
+    for (const [key, ab] of Object.entries(this.raw)) {
+      try {
+        this.ctx.decodeAudioData(ab.slice(0)).then((b) => { this.buf[key] = b; }).catch(() => { });
+      } catch { /* undecodable: synth covers it */ }
+    }
     this.startAmbient();
   }
 

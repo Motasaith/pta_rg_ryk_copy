@@ -4,6 +4,7 @@ import { clamp, damp, fwdX, fwdZ, rgtX, rgtZ, wrapPi } from './mathx';
 import { Box, KIND, Physics } from './physics';
 import { Humanoid } from './humanoid';
 import { tex } from './materials';
+import type { AssetBank } from './assets';
 
 export type VehKind = 'sedan' | 'hatch' | 'suv' | 'van' | 'sports' | 'police' | 'rickshaw' | 'muscle' | 'hyper' | 'truck';
 
@@ -190,6 +191,8 @@ function wheel(r: number, width: number): THREE.Group {
 }
 
 export function createVehicle(kind: VehKind, colour: number): Vehicle {
+  const proto = modelProtos.get(kind);
+  if (proto) return createModelVehicle(proto, kind, colour);
   const spec = SPECS[kind];
   const M = mats();
   const group = new THREE.Group();
@@ -368,18 +371,7 @@ export function createVehicle(kind: VehKind, colour: number): Vehicle {
     wheelMeshes.push({ mesh: w, front });
   }
 
-  const v: Vehicle = {
-    kind, colour, spec, group, wheelMeshes, bodyPivot,
-    brakeLight: brakeMesh, lightbar,
-    x: 0, y: 0, z: 0, yaw: 0, vx: 0, vz: 0, speed: 0, steerAngle: 0, wheelSpin: 0,
-    health: 100,
-    boost: 1, boosting: false, boostLock: false,
-    ctrl: { throttle: 0, brake: 0, steer: 0, handbrake: false, boost: false },
-    driver: null, isPlayer: false, siren: false,
-    box: { minX: 0, maxX: 0, minZ: 0, maxZ: 0, bottom: 0, top: spec.height, kind: KIND.Vehicle },
-    ai: null, hornT: 0, crashT: 0, bodyRoll: 0, bodyPitch: 0, netId: 0,
-  };
-  v.box.owner = v;
+  const v = finishVehicle(kind, colour, group, wheelMeshes, bodyPivot, brakeMesh, lightbar);
   return v;
 }
 
@@ -388,6 +380,182 @@ export function placeVehicle(v: Vehicle, x: number, z: number, yaw: number): voi
   v.vx = 0; v.vz = 0; v.speed = 0;
   v.group.position.set(x, v.y, z);
   v.group.rotation.y = yaw;
+}
+
+/* ── downloaded GLTF models ───────────────────────────────────────────────────
+ *
+ * Quaternius CC0 cars (poly.pizza mirrors). The GLTFs arrive in wildly different
+ * conventions — flat hierarchies with baked geometry, or scaled/rotated nodes — so
+ * each one is normalized ONCE into a prototype:
+ *
+ *   • scaled to the class spec's length, origin centred, wheels on the ground
+ *   • nose pointed at +Z (our forward), decided by where the headlight mesh sits
+ *   • every wheel mesh re-centred on its own axle and hung under a pivot named
+ *     "WHEELPIVOT_F…" / "WHEELPIVOT_R…", matching the procedural wheel contract
+ *     (pivot steers on Y, its child spins on X)
+ *   • meshes tagged via userData for per-instance tinting and the brake/lightbar
+ *
+ * Spawning then is a cheap deep clone; materials are cloned so paint and lamp
+ * glow vary per car. The rickshaw, Bedford jingle truck and panel van stay
+ * procedural — no CC0 model looks the part.
+ */
+
+const WHEEL_NAME_RE = /frontleft|frontright|frontwheel_?l|frontwheel_?r|backwheels|rearwheels/i;
+const FRONT_NAME_RE = /front/i;
+/** Materials that must survive tinting untouched. */
+const UNDYED_RE = /windows|glass|headlights?|taillights?|brakelight|black|grey|gray|tires?|tyres?|wheels?|bluelights|whitelights|atlas|chrome|lights?/i;
+
+const modelProtos = new Map<VehKind, THREE.Object3D>();
+
+export function initVehicleModels(bank: AssetBank): void {
+  const files: Partial<Record<VehKind, string>> = {
+    sedan: 'sedan', hatch: 'hatch', suv: 'suv', police: 'police',
+    sports: 'sports', muscle: 'muscle', hyper: 'hyper',
+  };
+  for (const [kind, file] of Object.entries(files) as [VehKind, string][]) {
+    const scene = bank.model(file);
+    if (scene) modelProtos.set(kind, preparePrototype(scene, SPECS[kind]));
+  }
+}
+
+function preparePrototype(scene: THREE.Object3D, spec: VehSpec): THREE.Object3D {
+  const container = new THREE.Group();
+  container.add(scene);
+  scene.updateMatrixWorld(true);
+
+  // Split wheel meshes out, flattening whatever transform chain they arrived in.
+  const wheelMeshes: THREE.Mesh[] = [];
+  scene.traverse((o) => {
+    if ((o as THREE.Mesh).isMesh && o.name && WHEEL_NAME_RE.test(o.name)) wheelMeshes.push(o as THREE.Mesh);
+  });
+  for (const wm of wheelMeshes) {
+    const geo = wm.geometry.clone();
+    geo.applyMatrix4(wm.matrixWorld);          // bake the whole chain into the vertices
+    geo.computeBoundingBox();
+    const bb = geo.boundingBox!;
+    const c = bb.getCenter(new THREE.Vector3());
+    geo.translate(-c.x, -c.y, -c.z);           // spin around the axle, not the car
+    // A downloaded wheel never matches spec.wheelR exactly; resize so it meets the
+    // ground when the pivot is pinned to y = wheelR each frame.
+    const r = Math.max(bb.max.y - bb.min.y, bb.max.z - bb.min.z) / 2;
+    if (r > 1e-4) geo.scale(spec.wheelR / r, spec.wheelR / r, spec.wheelR / r);
+    const vis = new THREE.Mesh(geo, wm.material);
+    vis.name = 'wheelVisual';
+    vis.castShadow = true;
+    const pivot = new THREE.Group();
+    pivot.name = 'WHEELPIVOT_' + (FRONT_NAME_RE.test(wm.name) ? 'F' : 'R');
+    pivot.position.copy(c);
+    pivot.add(vis);
+    wm.parent?.add(pivot);
+    wm.removeFromParent();
+  }
+
+  // Lamp emissives + tint/body tagging on the shared prototype materials.
+  scene.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const mats = Array.isArray(m.material) ? m.material : [m.material];
+    for (const raw of mats) {
+      const mat = raw as THREE.MeshStandardMaterial;
+      if (!mat || !mat.name) continue;
+      const n = mat.name.toLowerCase();
+      if (/headlights?/.test(n)) { mat.emissive = new THREE.Color(0xfff0c2); mat.emissiveIntensity = 1.1; }
+      else if (/taillights?|brakelight/.test(n)) { mat.emissive = new THREE.Color(0xff2200); mat.emissiveIntensity = 0.25; m.userData.lights = 'tail'; }
+      else if (/bluelights?/.test(n)) { mat.emissive = new THREE.Color(0x2255ff); mat.emissiveIntensity = 0; m.userData.lights = 'barL'; }
+      else if (/whitelights?/.test(n)) { mat.emissive = new THREE.Color(0xffffff); mat.emissiveIntensity = 0; m.userData.lights = 'barR'; }
+      if (!UNDYED_RE.test(n)) m.userData.tintable = true;
+    }
+  });
+
+  // Which way is forward? Ask the headlights.
+  let headZ = 0;
+  scene.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const mats = Array.isArray(m.material) ? m.material : [m.material];
+    if (mats.some((x) => /headlights?/i.test((x as THREE.MeshStandardMaterial).name || ''))) {
+      m.geometry.computeBoundingBox();
+      headZ += m.geometry.boundingBox!.getCenter(new THREE.Vector3()).z;
+    }
+  });
+  if (headZ < 0) container.rotation.y = Math.PI;
+
+  // Fit to the spec's footprint.
+  container.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(container);
+  const size = box.getSize(new THREE.Vector3());
+  const scale = (spec.halfL * 2) / Math.max(size.z, 1e-4);
+  container.scale.setScalar(scale);
+  container.updateMatrixWorld(true);
+  const box2 = new THREE.Box3().setFromObject(container);
+  const c2 = box2.getCenter(new THREE.Vector3());
+  container.position.set(-c2.x, -box2.min.y, -c2.z);
+  container.updateMatrixWorld(true);
+  return container;
+}
+
+function createModelVehicle(proto: THREE.Object3D, kind: VehKind, colour: number): Vehicle {
+  const spec = SPECS[kind];
+  const group = new THREE.Group();
+  const bodyPivot = new THREE.Group();
+  group.add(bodyPivot);
+
+  const root = proto.clone(true);
+  root.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    m.material = Array.isArray(m.material)
+      ? m.material.map((x) => (x as THREE.Material).clone())
+      : (m.material as THREE.Material).clone();
+    m.castShadow = true;
+    m.receiveShadow = true;
+  });
+
+  // Wheels hang off the group (so body roll never lifts them); the rest rides the pivot.
+  const wheels: THREE.Object3D[] = [];
+  root.traverse((o) => { if (o.name.startsWith('WHEELPIVOT')) wheels.push(o); });
+  for (const w of wheels) group.attach(w);
+  bodyPivot.add(root);
+
+  const wheelMeshes: Vehicle['wheelMeshes'] = wheels.map((w) => ({ mesh: w, front: w.name.includes('_F') }));
+  let brakeLight: THREE.Mesh | null = null;
+  let barL: THREE.Mesh | null = null;
+  let barR: THREE.Mesh | null = null;
+  root.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    if (m.userData.lights === 'tail' && !brakeLight) brakeLight = m;
+    if (m.userData.lights === 'barL' && !barL) barL = m;
+    if (m.userData.lights === 'barR' && !barR) barR = m;
+    if (m.userData.tintable) {
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      for (const x of mats) (x as THREE.MeshStandardMaterial).color = new THREE.Color(colour);
+    }
+  });
+
+  return finishVehicle(kind, colour, group, wheelMeshes, bodyPivot, brakeLight,
+    barL && barR ? { l: barL, r: barR } : null);
+}
+
+/** Shared tail of both factories: physics bookkeeping, collider box, control state. */
+function finishVehicle(
+  kind: VehKind, colour: number, group: THREE.Group,
+  wheelMeshes: Vehicle['wheelMeshes'], bodyPivot: THREE.Group,
+  brakeLight: THREE.Mesh | null, lightbar: Vehicle['lightbar'],
+): Vehicle {
+  const v: Vehicle = {
+    kind, colour, spec: SPECS[kind], group, wheelMeshes, bodyPivot,
+    brakeLight, lightbar,
+    x: 0, y: 0, z: 0, yaw: 0, vx: 0, vz: 0, speed: 0, steerAngle: 0, wheelSpin: 0,
+    health: 100,
+    boost: 1, boosting: false, boostLock: false,
+    ctrl: { throttle: 0, brake: 0, steer: 0, handbrake: false, boost: false },
+    driver: null, isPlayer: false, siren: false,
+    box: { minX: 0, maxX: 0, minZ: 0, maxZ: 0, bottom: 0, top: SPECS[kind].height, kind: KIND.Vehicle },
+    ai: null, hornT: 0, crashT: 0, bodyRoll: 0, bodyPitch: 0, netId: 0,
+  };
+  v.box.owner = v;
+  return v;
 }
 
 /** World-space AABB, refreshed every frame so other bodies can collide with it. */

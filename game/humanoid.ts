@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { clamp, damp, lerp, TAU } from './mathx';
+import { animatedHumansAvailable, createAnimatedHumanoid, disposeAnimatedHumanoid, poseAnimated, AnimatedHumanoid } from './characters';
 
 /**
  * A jointed humanoid built from capsules, with proportions taken from a 1.78m adult:
@@ -108,6 +109,9 @@ function part(parent: THREE.Object3D, geos: THREE.BufferGeometry[], meshes: THRE
 }
 
 export function createHumanoid(look: Look): Humanoid {
+  // When the CC0 animated model is available, every human in the game is built
+  // from it instead of the capsule rig; poseHumanoid dispatches transparently.
+  if (animatedHumansAvailable()) return createAnimatedHumanoid(look) as Humanoid;
   const root = new THREE.Group();
   const tilt = new THREE.Group();
   root.add(tilt);
@@ -229,6 +233,10 @@ export interface PoseInput {
 
 /** Drives every joint. Called once per frame per visible character. */
 export function poseHumanoid(h: Humanoid, p: PoseInput): void {
+  if ((h as AnimatedHumanoid).mixer) {
+    poseAnimated(h as AnimatedHumanoid, p);
+    return;
+  }
   const dt = p.dt;
   h.aimW = damp(h.aimW, p.aiming ? 1 : 0, 12, dt);
   const aw = h.aimW;
@@ -382,6 +390,8 @@ export function setHumanoidDetail(h: Humanoid, visible: boolean, shadows: boolea
 }
 
 export function disposeHumanoid(h: Humanoid): void {
+  const anim = h as AnimatedHumanoid;
+  if (anim.mixer) disposeAnimatedHumanoid(anim);
   for (const m of h.meshes) m.geometry.dispose();
   h.root.removeFromParent();
 }

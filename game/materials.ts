@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mulberry32, Rng } from './mathx';
 import { createWaterMaterial } from './water';
+import type { AssetBank } from './assets';
 
 /**
  * Every surface in the game is generated on a <canvas> at load time. No image downloads,
@@ -519,7 +520,7 @@ export interface Mats {
   facade: THREE.MeshStandardMaterial[];
 }
 
-export function buildMaterials(): Mats {
+export function buildMaterials(bank?: AssetBank): Mats {
   // vertexColors carries the baked ambient occlusion (see ao.ts) on every static surface
   const std = (o: THREE.MeshStandardMaterialParameters) => new THREE.MeshStandardMaterial({ vertexColors: true, ...o });
   /** albedo + a normal map derived from it, in one go */
@@ -529,24 +530,53 @@ export function buildMaterials(): Mats {
     normalScale: new THREE.Vector2(0.85, 0.85),
     ...o,
   });
+  /**
+   * A downloaded PBR set, if the bank has one — the procedural generator is the
+   * fallback. Roughness comes from the map when present, so the scalar stays 1.
+   */
+  const real = (id: string, o: THREE.MeshStandardMaterialParameters): THREE.MeshStandardMaterial | null => {
+    const set = bank?.get(id);
+    if (!set) return null;
+    return std({
+      map: set.map,
+      normalMap: set.normalMap,
+      roughnessMap: set.roughnessMap,
+      roughness: 1,
+      ...o,
+    });
+  };
+  const PLASTER_TEX = [
+    'plastered_wall_02', 'plastered_wall_03', 'plastered_wall_04',
+    'painted_plaster_wall', 'clay_plaster', 'yellow_plaster',
+  ];
   const foliageMat = bumpy('foliage', tex.foliage(), 1, { roughness: 0.9 });
   addSway(foliageMat);
   return {
-    asphalt: bumpy('asphalt', tex.asphalt(), 0.8, { roughness: 0.95, metalness: 0.02 }),
+    asphalt: real('asphalt_02', { metalness: 0.02 })
+      ?? bumpy('asphalt', tex.asphalt(), 0.8, { roughness: 0.95, metalness: 0.02 }),
     paint: std({ color: 0xd8cf9a, roughness: 0.7 }),
-    concrete: bumpy('concrete', tex.concrete(), 1.5, { roughness: 0.9 }),
+    concrete: real('concrete_pavement_02', {})
+      ?? bumpy('concrete', tex.concrete(), 1.5, { roughness: 0.9 }),
     curb: std({ color: 0xbdb8ad, roughness: 0.85 }),
-    grass: bumpy('grass', tex.grass(), 0.5, { roughness: 1 }),
-    dirt: bumpy('dirt', tex.dirt(), 0.9, { roughness: 1 }),
-    brick: bumpy('brick', tex.brick(), 2.6, { roughness: 0.92 }),
-    roof: bumpy('rooftile', tex.roofTile(), 2.2, { roughness: 0.85 }),
-    metal: bumpy('metal', tex.metal(), 0.7, { roughness: 0.45, metalness: 0.6 }),
-    wood: bumpy('wood', tex.wood(), 1.2, { roughness: 0.8 }),
+    grass: real('leafy_grass', {})
+      ?? bumpy('grass', tex.grass(), 0.5, { roughness: 1 }),
+    dirt: real('dirt', {})
+      ?? bumpy('dirt', tex.dirt(), 0.9, { roughness: 1 }),
+    brick: real('brick_wall_09', {})
+      ?? bumpy('brick', tex.brick(), 2.6, { roughness: 0.92 }),
+    roof: real('clay_roof_tiles_02', {})
+      ?? bumpy('rooftile', tex.roofTile(), 2.2, { roughness: 0.85 }),
+    metal: real('metal_plate', { metalness: 0.6 })
+      ?? bumpy('metal', tex.metal(), 0.7, { roughness: 0.45, metalness: 0.6 }),
+    wood: real('wood_planks', {})
+      ?? bumpy('wood', tex.wood(), 1.2, { roughness: 0.8 }),
     glass: std({ color: 0x8fbcd4, roughness: 0.08, metalness: 0.1, transparent: true, opacity: 0.42 }),
     water: createWaterMaterial(),
     trunk: std({ color: 0x6b4a2f, roughness: 0.95 }),
     foliage: foliageMat,
-    plaster: [0, 1, 2, 3, 4, 5].map((v) => bumpy('plaster' + v, tex.plaster(v), 1.1, { roughness: 0.85 })),
+    plaster: [0, 1, 2, 3, 4, 5].map((v) =>
+      real(PLASTER_TEX[v], {})
+      ?? bumpy('plaster' + v, tex.plaster(v), 1.1, { roughness: 0.85 })),
     facade: [0, 1, 2, 3].map((v) => bumpy('facade' + v, tex.facade(v), 1.8, {
       emissiveMap: tex.facadeLit(v),
       emissive: new THREE.Color(0xffffff),

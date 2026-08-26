@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { angleDamp, clamp, damp, dist2, fwdX, fwdZ, mulberry32, pick, rgtX, rgtZ, Rng, wrapPi } from './mathx';
 import { KIND, Physics } from './physics';
 import { buildMaterials, glowTexture, initTextures, Mats, updateFoliage } from './materials';
+import { AssetBank } from './assets';
 import { updateWater } from './water';
 import { Sky } from './sky';
 import { buildCity, City, LOT_Y, Shop } from './city';
@@ -9,6 +10,7 @@ import {
   createHumanoid, disposeHumanoid, Humanoid, poseHumanoid, setHumanoidDetail, SKINS,
 } from './humanoid';
 import { Ped, PedManager } from './peds';
+import { initCharacters } from './characters';
 import { Traffic } from './traffic';
 import { Combat } from './combat';
 import { CameraRig } from './camerarig';
@@ -25,7 +27,7 @@ import {
 } from './protocol';
 import { createWeaponModel, WeaponId, WeaponModel, WEAPON_ORDER, WEAPONS } from './weapons';
 import {
-  CAR_COLOURS, placeVehicle, seatWorld, stepVehicle, updateVehicleBox, Vehicle,
+  CAR_COLOURS, initVehicleModels, placeVehicle, seatWorld, stepVehicle, updateVehicleBox, Vehicle,
   vehicleSpeedKmh,
 } from './vehicle';
 
@@ -165,6 +167,10 @@ export class Game {
   private lastAttackerT = -99;
   /** Ambient car we are currently driving, so we can hand it back when we get out. */
   private claimedCar = 0;
+  /** Downloaded CC0 assets (textures, HDRI, models, audio); empty when offline. */
+  private bank = new AssetBank();
+  /** Every city material, so the day/night cycle can dim the HDRI ambient light. */
+  private envMats: THREE.MeshStandardMaterial[] = [];
 
   constructor(private canvas: HTMLCanvasElement, private settings: Settings) {
     this.preset = QUALITY[settings.quality];
@@ -196,14 +202,31 @@ export class Game {
       await new Promise<void>((r) => requestAnimationFrame(() => setTimeout(r, 0)));
     };
 
-    await step(6, 'mixing paint and concrete…');
+    await step(2, 'unloading the trucks…');
+    await this.bank.preload(
+      (frac) => setHud({ loadPct: 2 + Math.round(frac * 4), loadMsg: 'unpacking real materials…' }),
+      Math.min(8, this.renderer.capabilities.getMaxAnisotropy()),
+    );
+
+    await step(8, 'mixing paint and concrete…');
     initTextures(this.renderer);
-    this.mats = buildMaterials();
+    this.mats = buildMaterials(this.bank);
+    initVehicleModels(this.bank);
+    initCharacters(this.bank);
+    this.envMats = [this.mats.asphalt, this.mats.concrete, this.mats.grass, this.mats.dirt,
+      this.mats.brick, this.mats.roof, this.mats.metal, this.mats.wood, this.mats.curb,
+      ...this.mats.plaster, ...this.mats.facade];
 
     await step(18, 'raising the sky…');
     this.sky = new Sky(this.scene, this.preset.clouds, this.preset.shadowSize, this.preset.shadows);
     this.sky.setHour(this.settings.dayNight ? 9.5 : 12);
     this.scene.fog = new THREE.Fog(this.sky.fogColor().getHex(), this.preset.drawDistance * 0.45, this.preset.drawDistance);
+    // Real HDRI ambient + reflections, dimmed through the day so nights stay dark.
+    const env = this.bank.environment(this.renderer);
+    if (env) {
+      this.scene.environment = env;
+      this.setEnvIntensity(this.sky.hour);
+    }
 
     await step(30, 'surveying Rahim Garden City…');
     this.city = buildCity(this.scene, this.phys, this.mats, this.preset);
@@ -244,6 +267,10 @@ export class Game {
     this.renderer.render(this.scene, this.camera);
 
     await step(100, 'ready');
+    {
+      const roadImg = this.mats.asphalt.map?.image as { constructor?: { name?: string } } | undefined;
+      setHud({ loadMsg: `${this.bank.status()} · road=${roadImg?.constructor?.name ?? 'none'}` });  // TEMP DEBUG
+    }
     setHud({
       phase: 'title', total: this.items.length, triangles: Math.round(this.city.triangles),
       money: this.money, health: 100,
@@ -255,6 +282,17 @@ export class Game {
       if (!locked && this.running && !this.paused && getHud().phase === 'playing') this.setPaused(true);
     };
     addEventListener('resize', this.onResize);
+  }
+
+  /**
+   * The HDRI is a fixed midday capture, so it must fade with the sun or nights
+   * would glow. Scaled to near-black at midnight, full strength at noon.
+   */
+  private setEnvIntensity(hour: number): void {
+    const el = Math.sin(((hour - 6) / 12) * Math.PI);            // sun elevation proxy
+    const day = clamp((el + 0.12) * 3.2, 0, 1);                  // mirrors sky.night
+    const i = 0.06 + day * 0.94;
+    for (const m of this.envMats) m.envMapIntensity = i;
   }
 
   private spawnPlayer(): void {
@@ -647,6 +685,7 @@ export class Game {
     if (this.settings.dayNight) {
       this.sky.setHour(9.5 + t / 90);   // a full day every 36 minutes
       this.city.setNight(this.sky.night);
+      if (this.scene.environment) this.setEnvIntensity(this.sky.hour);
       if (this.scene.fog instanceof THREE.Fog) this.scene.fog.color.copy(this.sky.fogColor());
     }
 

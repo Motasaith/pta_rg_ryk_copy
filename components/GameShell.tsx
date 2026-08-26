@@ -101,6 +101,8 @@ export default function GameShell() {
 
       {hud.phase === 'loading' && !error && <Loader pct={hud.loadPct} msg={hud.loadMsg} />}
 
+      {hud.phase === 'title' && hud.loadMsg && <div className="loadnote">{hud.loadMsg}</div>}
+
       {hud.phase === 'title' && !showSettings && (
         <Title
           onStart={start}

@@ -6,6 +6,8 @@ next-env.d.ts
 .DS_Store
 .smoke-build
 _archive
+.asset-cache
+.zcode
 
 # secrets — never commit
 .env
