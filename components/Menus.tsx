@@ -45,6 +45,7 @@ export function Title({ onStart, onOnline, onSettings }: {
           <span><b>WASD</b> move</span>
           <span><b>SHIFT</b> sprint</span>
           <span><b>SPACE</b> jump / handbrake</span>
+          <span><b>C</b> crouch / sit</span>
           <span><b>MOUSE</b> look</span>
           <span><b>RMB</b> aim</span>
           <span><b>LMB</b> fire</span>

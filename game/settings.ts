@@ -39,7 +39,7 @@ export const QUALITY: Record<Quality, QualityPreset> = {
 };
 
 export const ACTIONS = [
-  'forward', 'back', 'left', 'right', 'sprint', 'jump', 'use', 'reload',
+  'forward', 'back', 'left', 'right', 'sprint', 'jump', 'crouch', 'use', 'reload',
   'fists', 'pistol', 'smg', 'shotgun', 'horn', 'map',
 ] as const;
 
@@ -52,6 +52,7 @@ export const ACTION_LABEL: Record<Action, string> = {
   right: 'Strafe right',
   sprint: 'Sprint / boost',
   jump: 'Jump / handbrake',
+  crouch: 'Crouch / sit',
   use: 'Interact · enter or exit vehicle',
   reload: 'Reload',
   fists: 'Fists',
@@ -71,6 +72,7 @@ export const DEFAULT_BINDS: Binds = {
   right: ['KeyD', 'ArrowRight'],
   sprint: ['ShiftLeft', 'ShiftRight'],
   jump: ['Space'],
+  crouch: ['KeyC'],
   use: ['KeyE', 'KeyF'],
   reload: ['KeyR'],
   fists: ['Digit1'],

@@ -65,6 +65,7 @@ export const F_VEHICLE = 1 << 2;
 export const F_DEAD = 1 << 3;
 export const F_GROUNDED = 1 << 4;
 export const F_FIRING = 1 << 5;
+export const F_CROUCH = 1 << 6;
 
 export const REJECT_FULL = 1;
 export const REJECT_VERSION = 2;

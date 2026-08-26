@@ -5,7 +5,7 @@ import {
 } from './humanoid';
 import { NetClient } from './netclient';
 import {
-  F_AIMING, F_DEAD, F_GROUNDED, F_SPRINT, F_VEHICLE, PlayerState, TEAM_COLOURS, TEAM_NONE,
+  F_AIMING, F_CROUCH, F_DEAD, F_GROUNDED, F_SPRINT, F_VEHICLE, PlayerState, TEAM_COLOURS, TEAM_NONE,
   VEH_KINDS,
 } from './protocol';
 import { NetTarget } from './combat';
@@ -110,6 +110,7 @@ export class RemotePlayers {
         aimPitch: 0,
         dead: dead ? 1 : 0,
         seated: false,
+        crouching: (s.flags & F_CROUCH) !== 0,
         punch: 0,
         flinch: 0,
         steer: 0,
@@ -289,10 +290,12 @@ function disposePlate(sp: THREE.Sprite): void {
 /** Pack the local player's animation state into protocol flags. */
 export function packFlags(o: {
   sprint: boolean; aiming: boolean; inVehicle: boolean; dead: boolean; grounded: boolean;
+  crouching?: boolean;
 }): number {
   return (o.sprint ? F_SPRINT : 0)
     | (o.aiming ? F_AIMING : 0)
     | (o.inVehicle ? F_VEHICLE : 0)
     | (o.dead ? F_DEAD : 0)
-    | (o.grounded ? F_GROUNDED : 0);
+    | (o.grounded ? F_GROUNDED : 0)
+    | (o.crouching ? F_CROUCH : 0);
 }

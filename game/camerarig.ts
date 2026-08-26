@@ -62,6 +62,7 @@ export class CameraRig {
     camera: THREE.PerspectiveCamera, dt: number,
     fx: number, fy: number, fz: number,
     aiming: boolean, zoom: number, phys: Physics, s: Settings,
+    crouching = false,
   ): void {
     // recover part of the recoil
     if (this.recover > 0) {
@@ -73,7 +74,7 @@ export class CameraRig {
     this.aimW = damp(this.aimW, aiming ? 1 : 0, 11, dt);
 
     const shoulder = lerp(0.34, 0.78, this.aimW);
-    const height = lerp(1.46, 1.52, this.aimW);
+    const height = lerp(crouching ? 1.05 : 1.46, 1.52, this.aimW);
     const want = lerp(this.dist, 2.5, this.aimW);
 
     this.pivot.set(

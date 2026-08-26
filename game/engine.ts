@@ -32,6 +32,7 @@ import {
 } from './vehicle';
 
 const WALK_SPEED = 2.3;
+const CROUCH_SPEED = 1.35;
 const RUN_SPEED = 6.1;
 const AIM_SPEED = 1.5;
 const PLAYER_R = 0.34;
@@ -93,6 +94,7 @@ export class Game {
   private vz = 0;
   private vy = 0;
   private grounded = true;
+  private crouching = false;
   private health = 100;
   private armour = 0;
   private money = 500;
@@ -738,6 +740,7 @@ export class Game {
           inVehicle: !!v,
           dead: this.dead,
           grounded: this.grounded,
+          crouching: this.crouching,
         }),
         speed: this.speed,
         weapon: Math.max(0, WEAPON_ORDER.indexOf(this.weapon)),
@@ -768,6 +771,14 @@ export class Game {
   /* ── on foot ───────────────────────────────────────────────────────────── */
 
   private updateOnFoot(dt: number, t: number): void {
+    if (this.input.justPressed('crouch')) {
+      this.crouching = !this.crouching;
+    }
+    const sprint = this.input.isDown('sprint') && !this.aiming;
+    if (sprint || !this.grounded) {
+      this.crouching = false;
+    }
+
     const fwd = this.input.axis('back', 'forward');
     const strafe = this.input.axis('left', 'right');
     let wx = this.rig.forwardX() * fwd + this.rig.rightX() * strafe;
@@ -775,8 +786,7 @@ export class Game {
     const l = Math.hypot(wx, wz);
     if (l > 1) { wx /= l; wz /= l; }
 
-    const sprint = this.input.isDown('sprint') && !this.aiming;
-    const maxSpeed = this.aiming ? AIM_SPEED : sprint ? RUN_SPEED : WALK_SPEED;
+    const maxSpeed = this.crouching ? CROUCH_SPEED : this.aiming ? AIM_SPEED : sprint ? RUN_SPEED : WALK_SPEED;
     const targetX = wx * maxSpeed, targetZ = wz * maxSpeed;
     const accel = l > 0 ? 16 : 12;
     this.vx = damp(this.vx, targetX, accel, dt);
@@ -803,6 +813,7 @@ export class Game {
       if (this.input.justPressed('jump')) {
         this.vy = JUMP_V;
         this.grounded = false;
+        this.crouching = false;
         this.audio.jump();
       } else if (this.py - ground > 0.55) {
         this.grounded = false;
@@ -850,6 +861,7 @@ export class Game {
       dt, t, speed: this.speed, runSpeed: RUN_SPEED, grounded: this.grounded, airVy: this.vy,
       aiming: this.aiming || (firing && this.weapon !== 'fists'),
       aimPitch: -this.rig.pitch, dead: 0, seated: false,
+      crouching: this.crouching,
       punch: this.punchT > 0.22 ? 1 : 0, flinch: this.flinch, steer: 0,
       // the head tracks the camera, so looking around actually looks around
       lookYaw: wrapPi(this.rig.yaw - this.pyaw),
@@ -860,6 +872,7 @@ export class Game {
     this.rig.updateOnFoot(
       this.camera, dt, this.px, this.py, this.pz,
       this.aiming, WEAPONS[this.weapon].zoom, this.phys, this.settings,
+      this.crouching,
     );
   }
 

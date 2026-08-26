@@ -24,21 +24,23 @@ export interface AnimatedHumanoid extends Humanoid {
   punchT: number;
 }
 
-type ClipName = 'idle' | 'walk' | 'jog' | 'sprint' | 'aim' | 'drive' | 'jump'
+type ClipName = 'idle' | 'walk' | 'jog' | 'sprint' | 'crouch' | 'crouchWalk' | 'aim' | 'drive' | 'jump'
   | 'punch' | 'hit' | 'death';
 
 /** Which embedded clip each state uses. Names carry a "Rig|" prefix. */
 const CLIP_MATCH: Record<ClipName, RegExp> = {
-  idle: /Idle_Loop/,
-  walk: /Walk_Loop/,
-  jog: /Jog_Fwd_Loop/,
-  sprint: /Sprint_Loop/,
-  aim: /Pistol_Idle_Loop/,
-  drive: /Driving_Loop/,
-  jump: /Jump_Loop/,
-  punch: /Punch_Jab/,
-  hit: /Hit_Chest/,
-  death: /Death01/,
+  idle: /(?:^|\|)Idle_Loop$/,
+  walk: /(?:^|\|)Walk_Loop$/,
+  jog: /(?:^|\|)Jog_Fwd_Loop$/,
+  sprint: /(?:^|\|)Sprint_Loop$/,
+  crouch: /(?:^|\|)Crouch_Idle_Loop$/,
+  crouchWalk: /(?:^|\|)Crouch_Fwd_Loop$/,
+  aim: /(?:^|\|)Pistol_Idle_Loop$/,
+  drive: /(?:^|\|)Driving_Loop$/,
+  jump: /(?:^|\|)Jump_Loop$/,
+  punch: /(?:^|\|)Punch_Jab$/,
+  hit: /(?:^|\|)Hit_Chest$/,
+  death: /(?:^|\|)Death01$/,
 };
 
 let template: THREE.Object3D | null = null;
@@ -188,6 +190,14 @@ export function poseAnimated(ch: AnimatedHumanoid, p: PoseInput): void {
     if (p.seated) fadeTo(ch, ch.a.drive);
     else if (!p.grounded) fadeTo(ch, ch.a.jump);
     else if (p.aiming) fadeTo(ch, ch.a.aim);
+    else if (p.crouching) {
+      const s = Math.abs(p.speed);
+      if (s < 0.12) fadeTo(ch, ch.a.crouch ?? ch.a.idle);
+      else fadeTo(ch, ch.a.crouchWalk ?? ch.a.walk);
+      if (ch.loco) {
+        ch.loco.timeScale = THREE.MathUtils.clamp(s / 1.35, 0.6, 1.4);
+      }
+    }
     else {
       const s = Math.abs(p.speed);
       if (s < 0.12) fadeTo(ch, ch.a.idle);

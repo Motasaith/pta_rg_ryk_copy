@@ -219,6 +219,7 @@ export interface PoseInput {
   /** 0 = alive, 1 = fully collapsed */
   dead: number;
   seated: boolean;
+  crouching?: boolean;
   /** 0..1 punch swing */
   punch: number;
   /** counts down after being shot */
@@ -280,8 +281,9 @@ export function poseHumanoid(h: Humanoid, p: PoseInput): void {
   }
 
   // ── hips / torso
+  const crouchDrop = p.crouching ? 0.32 : 0;
   h.bob = damp(h.bob, Math.abs(Math.sin(ph)) * 0.05 * amp, 18, dt);
-  h.hips.position.y = HIP_Y + h.bob + (p.grounded ? 0 : -0.04) + Math.sin(p.t * 1.7) * 0.006;
+  h.hips.position.y = HIP_Y - crouchDrop + h.bob + (p.grounded ? 0 : -0.04) + Math.sin(p.t * 1.7) * 0.006;
   h.hips.rotation.z = Math.sin(ph) * 0.045 * amp;
   h.hips.rotation.y = -Math.sin(ph) * 0.09 * amp;
   h.tilt.rotation.x = damp(h.tilt.rotation.x, 0.03 + sr * 0.13 * (1 - aw * 0.6), 10, dt);
