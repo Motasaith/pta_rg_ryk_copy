@@ -400,7 +400,7 @@ export class Game {
   /* ── lifecycle ─────────────────────────────────────────────────────────── */
 
   start(): void {
-    if (this.running) return;
+    if (this.running || !this.traffic || !this.hero) return;
     this.running = true;
     this.paused = false;
     this.startT = performance.now();
@@ -666,6 +666,7 @@ export class Game {
   };
 
   private updateFrame(dt: number): void {
+    if (!this.traffic || !this.hero || !this.peds) return;
     const t = this.elapsed;
 
     // map toggle + pause keys

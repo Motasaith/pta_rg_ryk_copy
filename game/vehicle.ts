@@ -400,7 +400,7 @@ export function placeVehicle(v: Vehicle, x: number, z: number, yaw: number): voi
  * procedural — no CC0 model looks the part.
  */
 
-const WHEEL_NAME_RE = /frontleft|frontright|frontwheel_?l|frontwheel_?r|backwheels|rearwheels/i;
+const WHEEL_NAME_RE = /frontleft|frontright|frontwheel_?l|frontwheel_?r|backwheels|rearwheels|wheel/i;
 const FRONT_NAME_RE = /front/i;
 /** Materials that must survive tinting untouched. */
 const UNDYED_RE = /windows|glass|headlights?|taillights?|brakelight|black|grey|gray|tires?|tyres?|wheels?|bluelights|whitelights|atlas|chrome|lights?/i;
@@ -423,31 +423,42 @@ function preparePrototype(scene: THREE.Object3D, spec: VehSpec): THREE.Object3D 
   container.add(scene);
   scene.updateMatrixWorld(true);
 
-  // Split wheel meshes out, flattening whatever transform chain they arrived in.
-  const wheelMeshes: THREE.Mesh[] = [];
+  // Extract whole wheel nodes, preserving tire + rim sub-meshes together.
+  const wheelNodes: THREE.Object3D[] = [];
   scene.traverse((o) => {
-    if ((o as THREE.Mesh).isMesh && o.name && WHEEL_NAME_RE.test(o.name)) wheelMeshes.push(o as THREE.Mesh);
+    if (o.name && WHEEL_NAME_RE.test(o.name) && o.parent && !WHEEL_NAME_RE.test(o.parent.name)) {
+      wheelNodes.push(o);
+    }
   });
-  for (const wm of wheelMeshes) {
-    const geo = wm.geometry.clone();
-    geo.applyMatrix4(wm.matrixWorld);          // bake the whole chain into the vertices
-    geo.computeBoundingBox();
-    const bb = geo.boundingBox!;
-    const c = bb.getCenter(new THREE.Vector3());
-    geo.translate(-c.x, -c.y, -c.z);           // spin around the axle, not the car
-    // A downloaded wheel never matches spec.wheelR exactly; resize so it meets the
-    // ground when the pivot is pinned to y = wheelR each frame.
-    const r = Math.max(bb.max.y - bb.min.y, bb.max.z - bb.min.z) / 2;
-    if (r > 1e-4) geo.scale(spec.wheelR / r, spec.wheelR / r, spec.wheelR / r);
-    const vis = new THREE.Mesh(geo, wm.material);
-    vis.name = 'wheelVisual';
-    vis.castShadow = true;
+
+  for (const node of wheelNodes) {
+    node.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(node);
+    const c = box.getCenter(new THREE.Vector3());
+
     const pivot = new THREE.Group();
-    pivot.name = 'WHEELPIVOT_' + (FRONT_NAME_RE.test(wm.name) ? 'F' : 'R');
+    pivot.name = 'WHEELPIVOT_' + (FRONT_NAME_RE.test(node.name) ? 'F' : 'R');
     pivot.position.copy(c);
-    pivot.add(vis);
-    wm.parent?.add(pivot);
-    wm.removeFromParent();
+
+    const spinner = new THREE.Group();
+    spinner.name = 'spinner';
+    pivot.add(spinner);
+
+    const meshes: THREE.Mesh[] = [];
+    node.traverse((o) => { if ((o as THREE.Mesh).isMesh) meshes.push(o as THREE.Mesh); });
+
+    for (const m of meshes) {
+      const geo = m.geometry.clone();
+      geo.applyMatrix4(m.matrixWorld);
+      geo.translate(-c.x, -c.y, -c.z);
+      const vis = new THREE.Mesh(geo, m.material);
+      vis.castShadow = true;
+      vis.receiveShadow = true;
+      spinner.add(vis);
+    }
+
+    node.parent?.add(pivot);
+    node.removeFromParent();
   }
 
   // Lamp emissives + tint/body tagging on the shared prototype materials.
@@ -666,8 +677,7 @@ export function stepVehicle(v: Vehicle, dt: number, phys: Physics): void {
   for (const w of v.wheelMeshes) {
     // local +Y rotation turns the wheel left, so negate to point it where we steer
     if (w.front) w.mesh.rotation.y = -v.steerAngle;
-    w.mesh.children[0].rotation.x = v.wheelSpin;
-    w.mesh.position.y = s.wheelR;
+    if (w.mesh.children[0]) w.mesh.children[0].rotation.x = v.wheelSpin;
   }
   // sliding right (+lateral) leans the body left, which is a negative Z rotation
   const lateral = clamp((v.vx * rx + v.vz * rz) * 0.06, -0.22, 0.22);
@@ -760,7 +770,7 @@ export function poseNetVehicle(v: Vehicle, x: number, y: number, z: number, yaw:
   v.wheelSpin += (v.speed / v.spec.wheelR) * dt;
   for (const w of v.wheelMeshes) {
     if (w.front) w.mesh.rotation.y = -v.steerAngle;
-    w.mesh.children[0].rotation.x = v.wheelSpin;
+    if (w.mesh.children[0]) w.mesh.children[0].rotation.x = v.wheelSpin;
   }
   updateVehicleBox(v);
 }
