@@ -66,11 +66,15 @@ export function animatedHumansAvailable(): boolean {
 }
 
 export function createAnimatedHumanoid(look: Look): AnimatedHumanoid {
-  const root = skeletonClone(template!) as THREE.Group;
-  root.scale.setScalar(charScale * look.scale);
+  const root = new THREE.Group();
+  const inner = skeletonClone(template!) as THREE.Group;
+  inner.scale.setScalar(charScale * look.scale);
+  // GLTF models default to -Z forward; rotate 180° so character faces +Z (game forward)
+  inner.rotation.y = Math.PI;
+  root.add(inner);
 
   const meshes: THREE.Mesh[] = [];
-  root.traverse((o) => {
+  inner.traverse((o) => {
     const m = o as THREE.Mesh & { material: THREE.Material | THREE.Material[] };
     if (!m.isMesh) return;
     m.material = Array.isArray(m.material)
@@ -94,7 +98,7 @@ export function createAnimatedHumanoid(look: Look): AnimatedHumanoid {
     }
   }
 
-  const mixer = new THREE.AnimationMixer(root);
+  const mixer = new THREE.AnimationMixer(inner);
   const a = {} as Record<ClipName, THREE.AnimationAction | undefined>;
   for (const key of Object.keys(CLIP_MATCH) as ClipName[]) {
     const clip = templateClips.find((c) => CLIP_MATCH[key].test(c.name));
@@ -106,14 +110,14 @@ export function createAnimatedHumanoid(look: Look): AnimatedHumanoid {
   if (a.punch) a.punch.timeScale = 1.6;
   a.idle?.play();
 
-  // Weapons hang off the right hand bone. The corrective rotation lines the grip
-  // up with the way the universal rig holds a pistol.
+  // Weapons hang off the right hand bone. Compensate for internal rig scale 100.
   const gunMount = new THREE.Object3D();
   gunMount.name = 'gunMount';
-  const hand = root.getObjectByName('DEF-hand.R');
+  gunMount.scale.setScalar(0.01);
+  gunMount.position.set(0, 0.09 / 100, 0.015 / 100);
+  gunMount.rotation.set(-Math.PI / 2 - 0.22, 0, -0.08);
+  const hand = inner.getObjectByName('DEF-handR') || inner.getObjectByName('DEF-hand.R');
   if (hand) {
-    gunMount.position.set(0, 0.09, 0.015);
-    gunMount.rotation.set(-Math.PI / 2 + 0.32, 0, -0.08);
     hand.add(gunMount);
   }
 
@@ -203,5 +207,5 @@ export function poseAnimated(ch: AnimatedHumanoid, p: PoseInput): void {
 
 export function disposeAnimatedHumanoid(ch: AnimatedHumanoid): void {
   ch.mixer.stopAllAction();
-  ch.mixer.uncacheRoot(ch.root);
+  ch.mixer.uncacheRoot(ch.mixer.getRoot());
 }
