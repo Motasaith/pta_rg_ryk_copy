@@ -220,7 +220,7 @@ export function buildCity(scene: THREE.Scene, phys: Physics, mats: Mats, preset:
         case 'mosque': mosque(B, phys, mats, cx, cz, minimap, pois, signMeshes, itemSpots); break;
         case 'market': {
           market(B, phys, mats, cx, cz, minimap, pois, shops, signMeshes, parkSpots);
-          hospital = { x: cx, z: cz - HALF_CORE - 2 };
+          hospital = { x: cx, z: cz - 6 };
           break;
         }
         case 'police': policeStation = policeBlock(B, phys, mats, cx, cz, minimap, pois, signMeshes, parkSpots); break;

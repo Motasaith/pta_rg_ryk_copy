@@ -169,6 +169,21 @@ export function poseAnimated(ch: AnimatedHumanoid, p: PoseInput): void {
     return;
   }
 
+  // Revived or respawned: cleanly cancel death pose and restore full locomotion
+  if (ch.deadPlayed) {
+    ch.deadPlayed = false;
+    if (ch.a.death) {
+      ch.a.death.stop();
+      ch.a.death.reset();
+    }
+    if (ch.oneShot === ch.a.death) {
+      ch.oneShot = null;
+      ch.oneShotT = 0;
+    }
+    ch.loco = null;
+    fadeTo(ch, ch.a.idle, 0.1);
+  }
+
   if (p.punch > 0) ch.punchT = 0.38;
   ch.punchT = Math.max(0, ch.punchT - dt);
   if (ch.punchT > 0 && ch.a.punch && ch.oneShot !== ch.a.punch) {

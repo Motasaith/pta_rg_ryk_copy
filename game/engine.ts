@@ -1516,12 +1516,20 @@ export class Game {
     this.wanted = 0;
     this.dead = false;
     this.deadT = 0;
+    this.crouching = false;
+    this.speed = 0;
     this.peds.removeCops();
     for (const v of [...this.traffic.cars]) if (v.kind === 'police' && !v.isPlayer) this.traffic.remove(v);
     this.audio.sirenOff();
     const h = this.city.hospital;
     this.teleport(h.x, h.z);
     this.hero.tilt.rotation.set(0, 0, 0);
+    poseHumanoid(this.hero, {
+      dt: 0.016, t: this.elapsed, speed: 0, runSpeed: RUN_SPEED, grounded: true, airVy: 0,
+      aiming: false, aimPitch: 0, dead: 0, seated: false,
+      crouching: false,
+      punch: 0, flinch: 0, steer: 0,
+    });
     this.toast(`Patched up at the clinic — Rs.${cost}`);
     setHud({ phase: 'playing', health: 100, money: this.money, wanted: 0 });
   }
@@ -1538,12 +1546,20 @@ export class Game {
     this.wanted = 0;
     this.dead = false;
     this.deadT = 0;
+    this.crouching = false;
+    this.speed = 0;
     this.lastAttacker = 0;
     this.peds.removeCops();
     this.audio.sirenOff();
     const spot = this.matchSpawn();
     this.teleport(spot.x, spot.z);
     this.hero.tilt.rotation.set(0, 0, 0);
+    poseHumanoid(this.hero, {
+      dt: 0.016, t: this.elapsed, speed: 0, runSpeed: RUN_SPEED, grounded: true, airVy: 0,
+      aiming: false, aimPitch: 0, dead: 0, seated: false,
+      crouching: false,
+      punch: 0, flinch: 0, steer: 0,
+    });
     this.mag[this.weapon] = WEAPONS[this.weapon].mag;
     setHud({ phase: 'playing', health: 100, wanted: 0 });
   }
