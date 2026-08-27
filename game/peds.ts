@@ -202,8 +202,9 @@ export class PedManager {
       p.bleed = Math.max(0, p.bleed - dt * 2);
 
       if (p.state === 'dead') {
-        p.deadT = Math.min(1, p.deadT + dt * 1.4);
+        p.deadT = Math.min(1, p.deadT + dt * 2.0);
         p.corpseT += dt;
+        p.y = damp(p.y, this.phys.groundHeight(p.x, p.z, p.radius, p.y + 0.6), 18, dt);
         p.h.root.position.set(p.x, p.y, p.z);
         p.h.root.rotation.y = p.yaw;
         poseHumanoid(p.h, basePose(dt, t, 0, p, false));

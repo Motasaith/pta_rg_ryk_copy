@@ -344,22 +344,21 @@ export function poseHumanoid(h: Humanoid, p: PoseInput): void {
 }
 
 function poseDead(h: Humanoid, d: number, dt: number): void {
-  const k = clamp(d, 0, 1);
-  const e = k * k * (3 - 2 * k);
-  h.tilt.rotation.x = damp(h.tilt.rotation.x, 1.54, 7, dt);
-  h.tilt.rotation.z = damp(h.tilt.rotation.z, 0.22, 5, dt);
-  h.hips.position.y = lerp(HIP_Y, 0.22, e);
+  h.tilt.rotation.x = damp(h.tilt.rotation.x, -1.57, 9, dt);
+  h.tilt.rotation.z = damp(h.tilt.rotation.z, 0.08, 8, dt);
+  h.hips.position.y = damp(h.hips.position.y, 0.12, 10, dt);
   h.hips.rotation.set(0, 0, 0);
-  h.chest.rotation.set(lerp(h.chest.rotation.x, 0.12, e), lerp(h.chest.rotation.y, 0.1, e), 0);
-  h.head.rotation.set(lerp(h.head.rotation.x, 0.3, e), lerp(h.head.rotation.y, 0.42, e), 0);
-  h.armL.rotation.set(lerp(h.armL.rotation.x, -0.5, e), 0, lerp(h.armL.rotation.z, -0.9, e));
-  h.armR.rotation.set(lerp(h.armR.rotation.x, -0.35, e), 0, lerp(h.armR.rotation.z, 0.95, e));
-  h.foreL.rotation.x = lerp(h.foreL.rotation.x, -0.35, e);
-  h.foreR.rotation.x = lerp(h.foreR.rotation.x, -0.2, e);
-  h.legL.rotation.set(lerp(h.legL.rotation.x, 0.32, e), 0, lerp(h.legL.rotation.z, 0.3, e));
-  h.legR.rotation.set(lerp(h.legR.rotation.x, -0.1, e), 0, lerp(h.legR.rotation.z, -0.42, e));
-  h.shinL.rotation.x = lerp(h.shinL.rotation.x, -0.7, e);
-  h.shinR.rotation.x = lerp(h.shinR.rotation.x, -0.25, e);
+  h.chest.rotation.set(0.04, 0.08, 0);
+  h.head.rotation.set(0.12, 0.35, 0);
+  h.armL.rotation.set(-0.2, 0, -0.65);
+  h.armR.rotation.set(-0.15, 0, 0.65);
+  h.foreL.rotation.x = -0.1;
+  h.foreR.rotation.x = -0.1;
+  h.legL.rotation.set(0.05, 0, 0.15);
+  h.legR.rotation.set(-0.05, 0, -0.15);
+  h.shinL.rotation.x = -0.1;
+  h.shinR.rotation.x = -0.1;
+  void d;
 }
 
 function poseSeated(h: Humanoid, p: PoseInput, dt: number): void {

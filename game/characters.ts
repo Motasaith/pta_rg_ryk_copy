@@ -106,7 +106,10 @@ export function createAnimatedHumanoid(look: Look): AnimatedHumanoid {
     const clip = templateClips.find((c) => CLIP_MATCH[key].test(c.name));
     if (clip) a[key] = mixer.clipAction(clip);
   }
-  if (a.death) a.death.setLoop(THREE.LoopOnce, 1).clampWhenFinished = true;
+  if (a.death) {
+    a.death.setLoop(THREE.LoopOnce, 1).clampWhenFinished = true;
+    a.death.timeScale = 2.0;
+  }
   if (a.punch) a.punch.setLoop(THREE.LoopOnce, 1).clampWhenFinished = true;
   if (a.hit) a.hit.setLoop(THREE.LoopOnce, 1).clampWhenFinished = true;
   if (a.punch) a.punch.timeScale = 1.6;
