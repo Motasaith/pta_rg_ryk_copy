@@ -6,6 +6,7 @@ import { getHud, resetHud, subscribeHud } from '@/game/hudstore';
 import { loadSettings, saveSettings, Settings } from '@/game/settings';
 import { Hud } from './Hud';
 import { Loader, MapOverlay, PauseMenu, Title, Wasted, Won } from './Menus';
+import { ShopMenu } from './ShopMenu';
 
 export default function GameShell() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -78,12 +79,13 @@ export default function GameShell() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.code !== 'Escape') return;
+      if (hud.shopOpen) gameRef.current?.closeShop();
       if (hud.phase === 'paused' && !showSettings) resume();
       if (hud.mapOpen) gameRef.current?.toggleMap(false);
     };
     addEventListener('keydown', onKey);
     return () => removeEventListener('keydown', onKey);
-  }, [hud.phase, hud.mapOpen, showSettings, resume]);
+  }, [hud.phase, hud.mapOpen, hud.shopOpen, showSettings, resume]);
 
   return (
     <div className="stage">
@@ -92,12 +94,26 @@ export default function GameShell() {
         className="viewport"
         onClick={() => {
           // clicking the world re-captures the mouse after Esc released it
-          if (hud.phase === 'playing') gameRef.current?.getInput().requestLock();
+          if (hud.phase === 'playing' && !hud.shopOpen) gameRef.current?.getInput().requestLock();
         }}
       />
       <Hud hud={hud} radarRef={radarRef} showPerf={settings.showFps} />
 
       {hud.mapOpen && <MapOverlay mapRef={mapRef} onClose={() => gameRef.current?.toggleMap(false)} />}
+
+      {hud.shopOpen && (
+        <ShopMenu
+          money={hud.money}
+          health={hud.health}
+          armour={hud.armour}
+          shopName={hud.shopName}
+          onBuyAmmo={(weaponId) => gameRef.current?.buyAmmo(weaponId)}
+          onBuyAllAmmo={() => gameRef.current?.buyAllAmmo()}
+          onBuyArmour={() => gameRef.current?.buyArmour()}
+          onBuyHealth={() => gameRef.current?.buyHealth()}
+          onClose={() => gameRef.current?.closeShop()}
+        />
+      )}
 
       {hud.phase === 'loading' && !error && <Loader pct={hud.loadPct} msg={hud.loadMsg} />}
 

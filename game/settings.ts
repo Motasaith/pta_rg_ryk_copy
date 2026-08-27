@@ -40,7 +40,8 @@ export const QUALITY: Record<Quality, QualityPreset> = {
 
 export const ACTIONS = [
   'forward', 'back', 'left', 'right', 'sprint', 'jump', 'crouch', 'use', 'reload',
-  'fists', 'pistol', 'smg', 'shotgun', 'horn', 'map',
+  'fists', 'knife', 'sword', 'pistol', 'smg', 'ak47', 'shotgun', 'sniper', 'rpg', 'minigun',
+  'horn', 'map',
 ] as const;
 
 export type Action = (typeof ACTIONS)[number];
@@ -53,12 +54,18 @@ export const ACTION_LABEL: Record<Action, string> = {
   sprint: 'Sprint / boost',
   jump: 'Jump / handbrake',
   crouch: 'Crouch / sit',
-  use: 'Interact · enter or exit vehicle',
+  use: 'Interact · enter/exit vehicle · open shop',
   reload: 'Reload',
-  fists: 'Fists',
-  pistol: 'Pistol',
-  smg: 'SMG',
-  shotgun: 'Shotgun',
+  fists: '1: Fists',
+  knife: '2: Combat Knife',
+  sword: '3: Katana',
+  pistol: '4: 9mm Pistol',
+  smg: '5: Micro SMG',
+  ak47: '6: AK-47',
+  shotgun: '7: Pump Shotgun',
+  sniper: '8: Sniper Rifle',
+  rpg: '9: RPG-7',
+  minigun: '0: Minigun',
   horn: 'Horn',
   map: 'Full map',
 };
@@ -76,9 +83,15 @@ export const DEFAULT_BINDS: Binds = {
   use: ['KeyE', 'KeyF'],
   reload: ['KeyR'],
   fists: ['Digit1'],
-  pistol: ['Digit2'],
-  smg: ['Digit3'],
-  shotgun: ['Digit4'],
+  knife: ['Digit2'],
+  sword: ['Digit3'],
+  pistol: ['Digit4'],
+  smg: ['Digit5'],
+  ak47: ['Digit6'],
+  shotgun: ['Digit7'],
+  sniper: ['Digit8'],
+  rpg: ['Digit9'],
+  minigun: ['Digit0'],
   horn: ['KeyH'],
   map: ['Tab', 'KeyM'],
 };

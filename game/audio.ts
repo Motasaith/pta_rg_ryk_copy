@@ -127,15 +127,51 @@ export class GameAudio {
   gunshot(id: WeaponId, vol = 1): void {
     if (!this.ctx) return;
     if (id === 'pistol') {
-      this.burst(0.16, 0.55 * vol, 2600, 0.8);
-      this.tone('square', 220, 60, 0.1, 0.12 * vol);
+      this.burst(0.14, 0.55 * vol, 2600, 0.8);
+      this.tone('square', 220, 60, 0.08, 0.12 * vol);
     } else if (id === 'smg') {
-      this.burst(0.1, 0.4 * vol, 3200, 0.7);
-      this.tone('square', 260, 90, 0.06, 0.09 * vol);
-    } else {
-      this.burst(0.34, 0.75 * vol, 1500, 1.1);
-      this.tone('sawtooth', 130, 40, 0.22, 0.16 * vol);
+      this.burst(0.09, 0.42 * vol, 3200, 0.7);
+      this.tone('square', 260, 90, 0.05, 0.09 * vol);
+    } else if (id === 'ak47') {
+      this.burst(0.24, 0.75 * vol, 1900, 1.2);
+      this.tone('sawtooth', 170, 45, 0.18, 0.18 * vol);
+    } else if (id === 'shotgun') {
+      this.burst(0.35, 0.85 * vol, 1400, 1.2);
+      this.tone('sawtooth', 130, 35, 0.24, 0.20 * vol);
+    } else if (id === 'sniper') {
+      this.burst(0.48, 0.95 * vol, 2200, 1.4);
+      this.tone('sawtooth', 240, 30, 0.35, 0.28 * vol);
+    } else if (id === 'rpg') {
+      this.burst(0.45, 0.85 * vol, 800, 0.9);
+      this.tone('sawtooth', 140, 380, 0.35, 0.22 * vol);
+    } else if (id === 'minigun') {
+      this.burst(0.07, 0.5 * vol, 3400, 0.8);
+      this.tone('square', 320, 120, 0.04, 0.12 * vol);
     }
+  }
+
+  slash(heavy = false): void {
+    if (!this.ctx) return;
+    if (heavy) {
+      this.burst(0.25, 0.5, 2400, 1.2, 'bandpass');
+      this.tone('sine', 480, 180, 0.18, 0.14);
+    } else {
+      this.burst(0.15, 0.35, 3200, 1.4, 'bandpass');
+      this.tone('sine', 620, 240, 0.12, 0.1);
+    }
+  }
+
+  explosion(vol = 1): void {
+    if (!this.ctx) return;
+    this.burst(0.7, 1.0 * vol, 500, 1.8);
+    this.burst(0.45, 0.7 * vol, 1200, 1.0, 'lowpass', 0.04);
+    this.tone('sawtooth', 85, 20, 0.65, 0.35 * vol);
+  }
+
+  purchase(): void {
+    if (!this.ctx) return;
+    this.tone('triangle', 988, 988, 0.08, 0.12);
+    this.tone('triangle', 1318, 1318, 0.14, 0.14, 0.06);
   }
 
   dryFire(): void { this.tone('square', 900, 500, 0.04, 0.06); }

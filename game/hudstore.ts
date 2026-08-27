@@ -35,6 +35,8 @@ export interface HudState {
   crosshairHot: boolean;
   busted: boolean;
   mapOpen: boolean;
+  shopOpen: boolean;
+  shopName: string;
   /* multiplayer */
   netStatus: 'offline' | 'connecting' | 'online' | 'error';
   netRoom: string;
@@ -62,6 +64,7 @@ const initial: HudState = {
   prompt: '', toast: '', objective: '', found: 0, total: 8,
   clock: '00:00', hour: 11, fps: 0, triangles: 0, drawCalls: 0,
   aiming: false, hitMarker: 0, crosshairHot: false, busted: false, mapOpen: false,
+  shopOpen: false, shopName: '',
   netStatus: 'offline', netRoom: '', netError: '', netPeers: 0, netNames: [],
   netTeam: 0, netHost: false, netMode: 0, netMatch: 0,
   netScoreA: 0, netScoreB: 0, netTarget: 0, netRoster: [], netFeed: [],

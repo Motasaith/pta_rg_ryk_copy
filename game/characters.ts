@@ -116,8 +116,8 @@ export function createAnimatedHumanoid(look: Look): AnimatedHumanoid {
   const gunMount = new THREE.Object3D();
   gunMount.name = 'gunMount';
   gunMount.scale.setScalar(0.01);
-  gunMount.position.set(0, 0.09 / 100, 0.015 / 100);
-  gunMount.rotation.set(-Math.PI / 2 - 0.22, 0, -0.08);
+  gunMount.position.set(0, 0.065 / 100, -0.015 / 100);
+  gunMount.rotation.set(1.41, Math.PI - 0.03, -0.04);
   const hand = inner.getObjectByName('DEF-handR') || inner.getObjectByName('DEF-hand.R');
   if (hand) {
     hand.add(gunMount);

@@ -25,7 +25,7 @@ import {
   HIT_HEAD, HIT_MELEE, HIT_VEHICLE, Hit as NetHit, MATCH_LIVE, MATCH_OVER, MatchState, MAX_SYNC_CARS,
   MODE_TDM, TEAM_A, TEAM_B, TEAM_NONE, VEH_KINDS, makeRoomCode, normaliseRoomCode,
 } from './protocol';
-import { createWeaponModel, WeaponId, WeaponModel, WEAPON_ORDER, WEAPONS } from './weapons';
+import { createWeaponModel, WeaponId, WeaponModel, WEAPON_ORDER, WEAPONS, WeaponSpec } from './weapons';
 import {
   CAR_COLOURS, initVehicleModels, placeVehicle, seatWorld, stepVehicle, updateVehicleBox, Vehicle,
   vehicleSpeedKmh,
@@ -108,9 +108,18 @@ export class Game {
   // weapons
   private weapon: WeaponId = 'fists';
   private models: Partial<Record<WeaponId, WeaponModel>> = {};
-  private mag: Record<WeaponId, number> = { fists: 0, pistol: 12, smg: 0, shotgun: 0 };
-  private reserve: Record<WeaponId, number> = { fists: 0, pistol: 36, smg: 0, shotgun: 0 };
-  private owned: Record<WeaponId, boolean> = { fists: true, pistol: true, smg: false, shotgun: false };
+  private mag: Record<WeaponId, number> = {
+    fists: 0, knife: 0, sword: 0,
+    pistol: 15, smg: 30, ak47: 30, shotgun: 8, sniper: 5, rpg: 1, minigun: 100,
+  };
+  private reserve: Record<WeaponId, number> = {
+    fists: 0, knife: 0, sword: 0,
+    pistol: 75, smg: 120, ak47: 120, shotgun: 32, sniper: 20, rpg: 5, minigun: 200,
+  };
+  private owned: Record<WeaponId, boolean> = {
+    fists: true, knife: true, sword: true,
+    pistol: true, smg: true, ak47: true, shotgun: true, sniper: true, rpg: true, minigun: true,
+  };
   private fireCd = 0;
   private reloadT = 0;
   private aiming = false;
@@ -257,6 +266,7 @@ export class Game {
     this.net.onClaim = (car, taken) => this.traffic.setClaimed(car, taken);
     this.combat = new Combat(this.scene, this.phys);
     this.combat.bloodEnabled = this.settings.blood;
+    this.combat.onExplosion = (ex, ey, ez, damage, radius) => this.onExplosion(ex, ey, ez, damage, radius);
     this.spawnPlayer();
     this.setWeapon('fists', true);
 
@@ -1021,14 +1031,31 @@ export class Game {
     setHud({ weapon: id, mag: this.mag[id], reserve: this.reserve[id] });
   }
 
+  private cycleWeapon(dir: number): void {
+    const idx = WEAPON_ORDER.indexOf(this.weapon);
+    const n = WEAPON_ORDER.length;
+    const next = (idx + dir + n) % n;
+    this.setWeapon(WEAPON_ORDER[next]);
+  }
+
   private updateWeapons(dt: number, t: number): void {
     this.fireCd = Math.max(0, this.fireCd - dt);
     this.hitMarker = Math.max(0, this.hitMarker - dt);
 
     if (this.input.justPressed('fists')) this.setWeapon('fists');
+    if (this.input.justPressed('knife')) this.setWeapon('knife');
+    if (this.input.justPressed('sword')) this.setWeapon('sword');
     if (this.input.justPressed('pistol')) this.setWeapon('pistol');
     if (this.input.justPressed('smg')) this.setWeapon('smg');
+    if (this.input.justPressed('ak47')) this.setWeapon('ak47');
     if (this.input.justPressed('shotgun')) this.setWeapon('shotgun');
+    if (this.input.justPressed('sniper')) this.setWeapon('sniper');
+    if (this.input.justPressed('rpg')) this.setWeapon('rpg');
+    if (this.input.justPressed('minigun')) this.setWeapon('minigun');
+
+    if (this.input.wheel !== 0 && !this.aiming) {
+      this.cycleWeapon(this.input.wheel > 0 ? 1 : -1);
+    }
 
     const spec = WEAPONS[this.weapon];
     if (this.reloadT > 0) {
@@ -1075,7 +1102,7 @@ export class Game {
     setHud({ reloading: true });
   }
 
-  private shoot(spec: typeof WEAPONS[WeaponId], t: number): void {
+  private shoot(spec: WeaponSpec, t: number): void {
     if (this.mag[this.weapon] <= 0) {
       this.audio.dryFire();
       this.fireCd = 0.25;
@@ -1096,9 +1123,25 @@ export class Game {
     const model = this.models[this.weapon];
     if (model) {
       model.muzzle.getWorldPosition(this.tmp2);
-      this.combat.muzzleFlash(this.tmp2.x, this.tmp2.y, this.tmp2.z, this.weapon === 'shotgun' ? 0.8 : 0.55);
+      this.combat.muzzleFlash(
+        this.tmp2.x, this.tmp2.y, this.tmp2.z,
+        this.weapon === 'shotgun' ? 0.85 : this.weapon === 'rpg' ? 1.2 : this.weapon === 'sniper' ? 0.75 : 0.55,
+      );
     } else {
       this.tmp2.set(ox, oy, oz);
+    }
+
+    if (spec.explosive) {
+      // RPG Rocket projectile
+      this.combat.spawnRocket(
+        this.tmp2.x, this.tmp2.y, this.tmp2.z,
+        this.camDir.x, this.camDir.y, this.camDir.z,
+        52, spec.damage,
+      );
+      this.rig.addRecoil(spec.recoilPitch, (Math.random() - 0.5) * spec.recoilYaw * 2, spec.shake);
+      this.peds.panic(this.px, this.pz, 30, 8);
+      if (!this.net.pvp) this.addWanted(0.4);
+      return;
     }
 
     const spreadScale = (this.aiming ? 0.32 : 1.5) * (this.speed > 2 ? 1.5 : 1);
@@ -1114,7 +1157,10 @@ export class Game {
         ox, oy, oz, dx * inv, dy * inv, dz * inv, spec.range,
         this.peds.peds, null, null, this.remotes.hitTargets(),
       );
-      this.combat.tracer(this.tmp2.x, this.tmp2.y, this.tmp2.z, hit.x, hit.y, hit.z);
+      this.combat.tracer(
+        this.tmp2.x, this.tmp2.y, this.tmp2.z, hit.x, hit.y, hit.z,
+        this.weapon === 'sniper' ? 0x7df3ff : 0xffd070,
+      );
 
       if (hit.kind === 'ped' && hit.ped) {
         hitAny = true;
@@ -1128,14 +1174,12 @@ export class Game {
         }
       } else if (hit.kind === 'player') {
         hitAny = true;
-        // Report it and stop. Their client subtracts the health and decides if they die —
-        // see the note on Hit in protocol.ts for why that is the only place it can happen.
         this.net.sendHit(hit.netId, spec.damage * (hit.head ? spec.headMult : 1), hit.head ? HIT_HEAD : 0);
         this.combat.bloodBurst(hit.x, hit.y, hit.z, -dx * inv, 0.4, -dz * inv, hit.head ? 14 : 9);
         this.audio.bodyHit();
       } else if (hit.kind === 'vehicle' && hit.veh) {
         hitAny = true;
-        hit.veh.health -= spec.damage * 0.5;
+        hit.veh.health -= spec.damage * 0.6;
         this.combat.impact(hit.x, hit.y, hit.z, hit.nx, hit.ny, hit.nz);
       } else if (hit.kind !== 'none') {
         this.combat.impact(hit.x, hit.y, hit.z, hit.nx, hit.ny, hit.nz);
@@ -1146,20 +1190,19 @@ export class Game {
       this.audio.hitMarker();
     }
     this.rig.addRecoil(spec.recoilPitch, (Math.random() - 0.5) * spec.recoilYaw * 2, spec.shake);
-    // gunfire in public is a crime, and everyone nearby knows it
     this.peds.panic(this.px, this.pz, 26, 7);
-    // ...but not during a match. Being chased by the police for shooting the other team
-    // turns a deathmatch into a police chase, which is a different game.
     if (!this.net.pvp) this.addWanted(killed ? 0 : 0.34);
   }
 
   private melee(t: number): void {
-    const spec = WEAPONS.fists;
+    const spec = WEAPONS[this.weapon];
     this.fireCd = 60 / spec.rpm;
     this.punchT = 0.4;
-    this.audio.punch();
-    // A player in range beats a pedestrian: swinging at someone and connecting with the
-    // civilian behind them is the single most annoying thing melee can do.
+    if (this.weapon === 'knife' || this.weapon === 'sword') {
+      this.audio.slash(this.weapon === 'sword');
+    } else {
+      this.audio.punch();
+    }
     if (this.net.pvp && this.meleePlayer(spec.range, spec.damage)) return;
 
     let best: Ped | null = null;
@@ -1169,19 +1212,68 @@ export class Game {
       const d = dist2(p.x, p.z, this.px, this.pz);
       if (d > bd) continue;
       const ang = Math.abs(wrapPi(Math.atan2(p.x - this.px, p.z - this.pz) - this.rig.yaw));
-      if (ang > 0.9) continue;
+      if (ang > 1.0) continue;
       bd = d;
       best = p;
     }
     if (!best) return;
     const died = this.peds.damage(best, spec.damage, this.px, this.pz);
-    this.combat.bloodBurst(best.x, best.y + 1.4, best.z, Math.sin(this.rig.yaw), 0.6, Math.cos(this.rig.yaw), 4);
+    this.combat.bloodBurst(
+      best.x, best.y + 1.3, best.z,
+      Math.sin(this.rig.yaw), 0.5, Math.cos(this.rig.yaw),
+      this.weapon === 'sword' ? 14 : 7,
+    );
     this.audio.bodyHit();
-    this.hitMarker = 0.2;
+    this.hitMarker = 0.22;
     if (died) this.onPedKilled(best);
     else this.addWanted(0.2);
-    this.peds.panic(this.px, this.pz, 12, 5);
+    this.peds.panic(this.px, this.pz, 14, 5);
     void t;
+  }
+
+  private onExplosion(ex: number, ey: number, ez: number, damage: number, radius: number): void {
+    this.audio.explosion();
+    const dPlayer = Math.hypot(this.px - ex, this.pz - ez);
+    if (dPlayer < radius) {
+      const dmg = damage * (1 - dPlayer / radius) * 0.45;
+      this.damagePlayer(dmg, ex, ez, true);
+    }
+    const dRig = Math.hypot(this.camera.position.x - ex, this.camera.position.z - ez);
+    if (dRig < 35) {
+      this.rig.shake = Math.min(2.0, this.rig.shake + (1 - dRig / 35) * 1.6);
+    }
+    for (const p of this.peds.peds) {
+      if (p.state === 'dead') continue;
+      const d = Math.hypot(p.x - ex, p.z - ez);
+      if (d < radius) {
+        const dmg = damage * (1 - d / radius);
+        const died = this.peds.damage(p, dmg, ex, ez);
+        this.combat.bloodBurst(p.x, p.y + 1.1, p.z, (p.x - ex) / (d + 0.1), 0.5, (p.z - ez) / (d + 0.1), 12);
+        if (died) this.onPedKilled(p);
+      }
+    }
+    for (const v of this.traffic.cars) {
+      const d = Math.hypot(v.x - ex, v.z - ez);
+      if (d < radius) {
+        const factor = 1 - d / radius;
+        v.health -= damage * factor * 0.75;
+        if (d > 0.1) {
+          v.vx += ((v.x - ex) / d) * 12 * factor;
+          v.vz += ((v.z - ez) / d) * 12 * factor;
+        }
+      }
+    }
+    if (this.net.status !== 'offline') {
+      for (const target of this.remotes.hitTargets()) {
+        if (target.friendly) continue;
+        const d = Math.hypot(target.x - ex, target.z - ez);
+        if (d < radius) {
+          this.net.sendHit(target.id, damage * (1 - d / radius), HIT_VEHICLE);
+        }
+      }
+    }
+    this.peds.panic(ex, ez, 32, 8);
+    this.addWanted(0.8);
   }
 
   /** Swing at the nearest enemy player in front of us. Returns true if we connected. */
@@ -1580,11 +1672,8 @@ export class Game {
         text = `E — drive the ${v.spec.name.toLowerCase()}`;
         this.promptAction = () => this.enterVehicle(v);
       } else if (shop) {
-        const price = shop.kind === 'ammo' ? 350 : 120;
-        text = shop.kind === 'ammo'
-          ? `E — buy ammo at ${shop.name} (Rs.${price})`
-          : `E — eat at ${shop.name} (Rs.${price})`;
-        this.promptAction = () => this.buy(shop, price);
+        text = `E — ${shop.name} (Shop & Ammo)`;
+        this.promptAction = () => this.openShop(shop.name);
       }
     }
 
@@ -1601,7 +1690,7 @@ export class Game {
 
   private nearestShop(): Shop | null {
     let best: Shop | null = null;
-    let bd = 3 * 3;
+    let bd = 3.5 * 3.5;
     for (const s of this.city.shops) {
       const d = dist2(s.x, s.z, this.px, this.pz);
       if (d < bd) { bd = d; best = s; }
@@ -1609,37 +1698,73 @@ export class Game {
     return best;
   }
 
-  private buy(shop: Shop, price: number): void {
-    if (this.money < price) {
+  openShop(name = 'AMMU-NATION'): void {
+    this.input.releaseLock();
+    setHud({ shopOpen: true, shopName: name });
+  }
+
+  closeShop(): void {
+    setHud({ shopOpen: false });
+    if (!this.paused && getHud().phase === 'playing') this.input.requestLock();
+  }
+
+  buyAmmo(id: WeaponId): boolean {
+    const spec = WEAPONS[id];
+    if (spec.melee || this.money < spec.priceAmmo) {
       this.audio.deny();
-      this.toast(`Need Rs.${price}`);
-      return;
+      return false;
     }
-    this.money -= price;
-    if (shop.kind === 'ammo') {
-      // first purchase also unlocks the weapon
-      if (!this.owned.smg && this.owned.pistol && this.reserve.pistol > 40) {
-        this.owned.smg = true;
-        this.reserve.smg = 90;
-        this.mag.smg = WEAPONS.smg.mag;
-        this.toast('SMG unlocked — press 3');
-      } else if (!this.owned.shotgun && this.owned.smg && this.reserve.smg > 60) {
-        this.owned.shotgun = true;
-        this.reserve.shotgun = 24;
-        this.mag.shotgun = WEAPONS.shotgun.mag;
-        this.toast('Shotgun unlocked — press 4');
-      } else {
-        const w: WeaponId = this.weapon === 'fists' ? 'pistol' : this.weapon;
-        this.reserve[w] = Math.min(WEAPONS[w].reserveMax, this.reserve[w] + WEAPONS[w].mag * 3);
-        this.toast(`Ammo restocked — Rs.${price}`);
+    this.money -= spec.priceAmmo;
+    this.reserve[id] = Math.min(spec.reserveMax, this.reserve[id] + spec.ammoPack);
+    this.audio.purchase();
+    this.toast(`Purchased +${spec.ammoPack} ${spec.name} ammo`);
+    setHud({ money: this.money, reserve: this.reserve[this.weapon] });
+    return true;
+  }
+
+  buyAllAmmo(): boolean {
+    if (this.money < 350) {
+      this.audio.deny();
+      return false;
+    }
+    this.money -= 350;
+    for (const id of WEAPON_ORDER) {
+      const spec = WEAPONS[id];
+      if (!spec.melee) {
+        this.reserve[id] = spec.reserveMax;
+        this.mag[id] = spec.mag;
       }
-      this.audio.reload();
-    } else {
-      this.health = Math.min(100, this.health + 45);
-      this.audio.pickup();
-      this.toast('Full and happy — +45 health');
     }
-    setHud({ money: this.money, health: Math.round(this.health), reserve: this.reserve[this.weapon] });
+    this.audio.purchase();
+    this.toast('All weapons fully reloaded & resupplied!');
+    setHud({ money: this.money, mag: this.mag[this.weapon], reserve: this.reserve[this.weapon] });
+    return true;
+  }
+
+  buyArmour(): boolean {
+    if (this.money < 100 || this.armour >= 100) {
+      this.audio.deny();
+      return false;
+    }
+    this.money -= 100;
+    this.armour = 100;
+    this.audio.purchase();
+    this.toast('Heavy Kevlar Body Armour equipped (+100 Armour)');
+    setHud({ money: this.money, armour: this.armour });
+    return true;
+  }
+
+  buyHealth(): boolean {
+    if (this.money < 50 || this.health >= 100) {
+      this.audio.deny();
+      return false;
+    }
+    this.money -= 50;
+    this.health = 100;
+    this.audio.purchase();
+    this.toast('Health restored to 100%');
+    setHud({ money: this.money, health: this.health });
+    return true;
   }
 
   /* ── vehicles vs people ───────────────────────────────────────────────── */

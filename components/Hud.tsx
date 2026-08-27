@@ -3,7 +3,9 @@
 import { HudState } from '@/game/hudstore';
 import { WEAPONS } from '@/game/weapons';
 
-const WEAPON_KEY: Record<string, string> = { fists: '1', pistol: '2', smg: '3', shotgun: '4' };
+const WEAPON_KEY: Record<string, string> = {
+  fists: '1', knife: '2', sword: '3', pistol: '4', smg: '5', ak47: '6', shotgun: '7', sniper: '8', rpg: '9', minigun: '0',
+};
 
 export function Hud({
   hud, radarRef, showPerf,
@@ -125,7 +127,7 @@ export function Hud({
           </div>
         )}
         <div className="wheel">
-          {(['fists', 'pistol', 'smg', 'shotgun'] as const).map((w) => (
+          {Object.keys(WEAPON_KEY).map((w) => (
             <span key={w} className={w === hud.weapon ? 'slot on' : 'slot'}>
               {WEAPON_KEY[w]}
             </span>

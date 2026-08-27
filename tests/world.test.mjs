@@ -76,7 +76,7 @@ console.log('\nmodels');
     ok(v.wheelMeshes.filter((w) => w.front).length >= 1, `${kind} has steerable front wheels`);
   }
 
-  for (const id of ['pistol', 'smg', 'shotgun']) {
+  for (const id of ['knife', 'sword', 'pistol', 'smg', 'ak47', 'shotgun', 'sniper', 'rpg', 'minigun']) {
     const w = createWeaponModel(id);
     ok(!!w && !!w.muzzle, `${id} model + muzzle point built`);
     const p = new THREE.Vector3();

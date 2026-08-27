@@ -48,9 +48,8 @@ export function Title({ onStart, onOnline, onSettings }: {
           <span><b>C</b> crouch / sit</span>
           <span><b>MOUSE</b> look</span>
           <span><b>RMB</b> aim</span>
-          <span><b>LMB</b> fire</span>
-          <span><b>1–4</b> fists · pistol · smg · shotgun</span>
-          <span><b>E</b> enter car / interact</span>
+          <span><b>1–9, 0</b> full arsenal (fists, knife, katana, pistol, smg, ak47, shotgun, sniper, rpg, minigun) / scroll wheel</span>
+          <span><b>E</b> enter car · open gun shop</span>
           <span><b>R</b> reload</span>
           <span><b>TAB</b> map</span>
           <span><b>ESC</b> pause</span>
