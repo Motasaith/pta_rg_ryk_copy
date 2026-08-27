@@ -944,11 +944,11 @@ export class Game {
       this.traffic.setClaimed(v.netId, true);
       this.net.sendClaim(v.netId, true);
     }
-    v.ctrl.handbrake = false;
-    // seat the hero inside the body so they roll with the suspension
+    // seat the hero inside the body so they roll with the suspension and sit properly inside the cabin
     this.hero.root.removeFromParent();
     v.bodyPivot.add(this.hero.root);
-    this.hero.root.position.set(v.spec.seat[0], v.spec.seat[1] - 0.72, v.spec.seat[2]);
+    const seatDrop = v.kind === 'truck' ? 1.05 : v.kind === 'van' ? 1.05 : v.kind === 'suv' ? 1.02 : v.kind === 'sports' || v.kind === 'hyper' ? 0.94 : v.kind === 'rickshaw' ? 0.88 : 0.96;
+    this.hero.root.position.set(v.spec.seat[0], v.spec.seat[1] - seatDrop, v.spec.seat[2]);
     this.hero.root.rotation.set(0, 0, 0);
     this.audio.engineOn();
     this.audio.ui();
