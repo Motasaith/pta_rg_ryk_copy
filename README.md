@@ -85,14 +85,55 @@ Free plan throughout. Durable Objects have been on the Workers Free plan since A
 | `E`            | enter/exit vehicle, buy from a shop           |
 | `H`            | horn                                          |
 | `TAB` / `M`    | full map                                      |
+| `` ` ``        | cheat console                                 |
 | `ESC`          | pause (also releases the mouse)               |
 
 Every key is rebindable in Pause → Controls, along with mouse sensitivity,
 separate aim sensitivity and invert-Y.
 
+### Cheats
+
+The backtick key opens a prompt; type a code and press `ENTER`, or click one of
+the suggestions. Cheats deliberately do **not** work by typing them blind into
+the world: on a keyboard every letter of HESOYAM is already a gameplay bind, so
+spelling one out mid-game emptied a magazine into a wall instead of granting
+anything. While the prompt is open the world keeps rendering but every gameplay
+bind is dead and the mouse is free.
+
+`HESOYAM` health, armour and Rs.250,000 · `BAGUVIX` unlimited health · `FULLCLIP` max ammo ·
+`LEAVEMEALONE` clear the wanted level · `BRINGITON` five stars · `SPEEDFREAK` run
+twice as fast · `PANZER` spawn a cruiser · `GETTHEREFAST` spawn a hypercar ·
+`ROCKETMAN` launch yourself · `BIGBANG` detonate nearby traffic · `TIMEFLIES` skip
+six hours · `WALKONWATER` stop drowning · `TAKEMETOTHEPUL` warp to the big bridge ·
+`TAKEMEHOME` warp to your front door.
+
 ## What is in the game
 
-- **The map** — two districts joined at one arterial, ~440 m x 760 m in total.
+- **Four maps, one at a time.** The title screen picks the world; only the one you
+  chose is ever generated, so nothing you are not playing costs any memory. All
+  four run the same generator (`city.ts`) driven by a `Theme` (`theme.ts`) — the
+  ground, the trees, the block mix, the building heights and the water:
+
+  | Map | Where | The channel |
+  | --- | --- | --- |
+  | **Rahim Garden City** | Rahim Yar Khan | the Grand Canal, crossed by the Big Pul |
+  | **Thal Desert Outpost** | Thal Desert | a dry wadi you can drive down into |
+  | **Murree Pine Valley** | Murree Hills | a cold river through a conifer town |
+  | **Karachi Metro** | Karachi | a shipping channel through downtown at night |
+
+  Changing map means restarting, which is what the restart button already does.
+
+- **The Grand Canal and the Big Pul** — every map is cut in two by a 56 m channel
+  dug 3–4 m into the world (`Physics.addPit`, so the terrain has a real hole in it,
+  not a blue quad laid on the grass), lined with concrete retaining walls and railed
+  towpaths, and spanned by four bridges. The boulevard carries the Big Pul: portal
+  towers, a fan of stay cables, and a deck at exactly `ROAD_Y` — the same height as
+  the road feeding it, one unbroken `Ground` collider bank to bank, so a car rolls
+  straight on at speed with nothing to catch a wheel. `tests/world.test.mjs` walks
+  the ground height down both lanes of every crossing and fails on any step over
+  3 cm. Fall in a wet one and you drown.
+
+- **The map** — two districts joined by the canal, ~440 m x 900 m in total.
 
   **Rahim Garden Housing Scheme** (south) is the real society, built from its own
   layout plan, at 1:1 in metres: 50' x 103' plots, 30'/40'/50' road hierarchy, the
@@ -182,7 +223,9 @@ game/
   engine.ts         orchestrator: player controller, weapons, heat, missions, frame loop
   physics.ts        AABB world + spatial hash: ground query, cylinder resolve, raycast
   layout.ts         geometry batcher, street furniture, road-graph types, plot-number atlas
-  city.ts           the invented grid city, and the district that stitches it all together
+  theme.ts          what makes one map look like a different place from another
+  maps.ts           the map roster; builds only the one the player picked
+  city.ts           the grid districts, the canal and its bridges — driven by a theme
   scheme.ts         the real Rahim Garden housing scheme, authored from its layout plan
   humanoid.ts       11-joint character rig + procedural animation
   vehicle.ts        bicycle-model arcade vehicle physics + car models

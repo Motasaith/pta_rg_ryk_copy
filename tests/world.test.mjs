@@ -161,15 +161,16 @@ rahim garden housing scheme`);
   ok(Math.abs(P.PARK_W - 21.336) < 0.01, `central park is the plan 70ft (${P.PARK_W.toFixed(2)}m)`);
   ok(Math.abs(P.PLOT_W - 15.24) < 0.01, `plot frontage is the plan 50ft (${P.PLOT_W.toFixed(2)}m)`);
 
-  const plots = C.minimap.buildings.filter((o) => o.z > 210);
+  const plots = C.minimap.buildings.filter((o) => o.z > 310);
   ok(plots.length > 110, `${plots.length} plots and civic buildings in the scheme`);
 
-  ok(C.bounds.maxZ > 500 && C.bounds.maxZ < 600, `world extends south to z=${C.bounds.maxZ.toFixed(0)}`);
+  // The scheme moved 100m south when the Grand Canal was widened to a real river.
+  ok(C.bounds.maxZ > 600 && C.bounds.maxZ < 700, `world extends south to z=${C.bounds.maxZ.toFixed(0)}`);
   ok(C.bounds.minZ < -200, 'the city end of the world is unchanged');
 
   // the scheme has to be reachable: its entrances must link to city intersections
   const cityNodes = C.nodes.filter((n) => n.z <= 200);
-  const schemeNodes = C.nodes.filter((n) => n.z > 200);
+  const schemeNodes = C.nodes.filter((n) => n.z > 300);
   const links = schemeNodes.filter((n) => n.nb.some((k) => cityNodes.includes(k)));
   ok(links.length === 4, `${links.length} scheme streets connect through to the city grid`);
   ok(schemeNodes.every((n) => n.nb.length >= 2), 'every scheme junction has at least two exits');
@@ -200,6 +201,89 @@ rahim garden housing scheme`);
   }
   ok(entryWidths.length === 4 && entryWidths.every((w) => w < 16),
     `entry lanes sized to the scheme streets (${entryWidths.map((w) => w.toFixed(1)).join(', ')}m)`);
+}
+
+/* -- the grand canal and its bridges -------------------------------------- */
+console.log(`
+grand canal + big pul`);
+{
+  const theme = await import('./theme.js');
+  const W = theme.DEFAULT_THEME.water;
+
+  ok(W.width >= 50, `the canal is ${W.width}m wide, not a gutter`);
+  ok(phys.pits.length === 1 && phys.pits[0].bed <= -3,
+    `the channel is a real hole in the world (bed y=${phys.pits[0]?.bed})`);
+  ok(C.waterZones.length === 1 && C.waterZones[0].surface < 0,
+    'the water surface sits below ground level, so it reads as a river');
+
+  // The bug: bridge decks sat 23cm above the road that fed them, so every crossing was a
+  // kerb you had to jump. Walk the ground height along each crossing centre line and
+  // assert it never steps by more than a paint stripe.
+  // Sampled down both lanes as well as the centre line, because a car drives in a lane.
+  let worst = 0, worstAt = 0, worstX = 0;
+  let fell = 0;
+  for (const cx of W.crossings) {
+    for (const lane of [-4, 0, 4]) {
+      const x = cx + lane;
+      let prev = null;
+      for (let z = 180; z <= theme.SOUTH_TOP + 2; z += 0.5) {
+        const g = phys.groundHeight(x, z, 0.9, 1.5, false);
+        if (g < 0) fell++;
+        if (prev !== null && Math.abs(g - prev) > worst) { worst = Math.abs(g - prev); worstAt = z; worstX = x; }
+        prev = g;
+      }
+    }
+  }
+  ok(worst <= 0.03, `every bridge is flush with its approach road (worst step ${worst.toFixed(3)}m)`,
+    worst > 0.03 ? `at x=${worstX}, z=${worstAt}` : '');
+  ok(fell === 0, 'no gap in any deck drops a car into the canal');
+
+  // ...but off the deck it very much is a hole.
+  const mid = phys.groundHeight(0, W.z, 0.9, 1.5, false);
+  ok(mid <= -3, `the channel floor is ${mid.toFixed(1)}m down between the bridges`);
+
+  // and the banks are railed, so you cannot drive in by accident
+  const rails = phys.boxes.filter((b) => b.kind === KIND.Fence
+    && b.minZ > W.z - W.width / 2 - 3 && b.maxZ < W.z + W.width / 2 + 3
+    && b.maxX - b.minX > 40);
+  ok(rails.length >= 4, `${rails.length} embankment railings guard the towpaths`);
+
+  // the traffic graph has to cross, or half the map is unreachable by car
+  const northSide = C.nodes.filter((n) => n.z <= 200);
+  const crossers = northSide.filter((n) => n.nb.some((k) => k.z > 300));
+  ok(crossers.length === W.crossings.length,
+    `${crossers.length} of the ${W.crossings.length} bridges carry the road graph across`);
+}
+
+/* -- every map builds ------------------------------------------------------ */
+console.log(`
+map roster`);
+{
+  const { MAPS } = await import('./maps.js');
+  ok(MAPS.length === 4, `${MAPS.length} maps on the picker`);
+  ok(new Set(MAPS.map((m) => m.id)).size === MAPS.length, 'map ids are unique');
+
+  for (const m of MAPS) {
+    const p2 = new Physics();
+    const s2 = new THREE.Scene();
+    const built = m.build(s2, p2, mats, QUALITY.medium, 20260805);
+    const start = p2.groundHeight(built.playerStart.x, built.playerStart.z, 0.34, 3);
+    p2.resolveCircle(built.playerStart.x, built.playerStart.z, 0.34, start, start + 1.78, 0.45, false);
+    ok(!p2.outHit && start > 0.1 && built.nodes.length > 30 && built.shops.length >= 4
+      && built.itemSpots.length >= 8 && built.pickupSpots.length >= 20,
+      `${m.name}: ${Math.round(built.triangles / 1000)}k tris, ${built.nodes.length} junctions, `
+      + `${built.shops.length} shops, spawn clear at y=${start.toFixed(2)}`);
+
+    // flood fill: no map may ship with an island you cannot drive to
+    const seen = new Set([built.nodes[0]]);
+    const q = [built.nodes[0]];
+    while (q.length) {
+      for (const nb of q.pop().nb) if (!seen.has(nb)) { seen.add(nb); q.push(nb); }
+    }
+    ok(seen.size === built.nodes.length,
+      `${m.name}: all ${built.nodes.length} junctions reachable from one another`,
+      `${built.nodes.length - seen.size} stranded`);
+  }
 }
 
 /* -- look and feel ------------------------------------------------------------

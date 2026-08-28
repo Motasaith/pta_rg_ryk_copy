@@ -22,6 +22,20 @@ export interface Box {
   owner?: unknown;
 }
 
+/**
+ * A rectangle where the world floor is *below* zero — a dug canal, a dry wadi bed, a
+ * harbour basin. Without this the ground query bottoms out at y = 0 everywhere and a
+ * "river" is only a blue quad you drive straight across.
+ */
+export interface Pit {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+  /** bed height, negative */
+  bed: number;
+}
+
 export interface RayHit {
   t: number;
   box: Box | null;
@@ -42,6 +56,8 @@ export class Physics {
   boxes: Box[] = [];
   /** Rebuilt every frame from moving bodies; checked linearly (there are only dozens). */
   dyn: Box[] = [];
+  /** Dug-out regions. A handful per map, so a linear scan is cheaper than any index. */
+  pits: Pit[] = [];
 
   private cs = 12;
   private grid = new Map<number, number[]>();
@@ -58,6 +74,27 @@ export class Physics {
     const b: Box = { minX, maxX, minZ, maxZ, bottom, top, kind };
     this.boxes.push(b);
     return b;
+  }
+
+  /** Dig a rectangle down to `bed`. Anything inside falls to that height instead of y = 0. */
+  addPit(minX: number, minZ: number, maxX: number, maxZ: number, bed: number): Pit {
+    const p: Pit = { minX, maxX, minZ, maxZ, bed };
+    this.pits.push(p);
+    return p;
+  }
+
+  /**
+   * World floor under a point: zero, or the bed of the deepest pit it is inside.
+   * The pit only counts when the whole probe circle is inside it, so a body standing on
+   * the very lip of the embankment stays on the bank rather than snapping to the bed.
+   */
+  floorAt(x: number, z: number, r = 0): number {
+    let y = 0;
+    for (let i = 0; i < this.pits.length; i++) {
+      const p = this.pits[i];
+      if (x - r > p.minX && x + r < p.maxX && z - r > p.minZ && z + r < p.maxZ && p.bed < y) y = p.bed;
+    }
+    return y;
   }
 
   /** Centre + half-extent form — most of the city generator thinks this way. */
@@ -115,7 +152,7 @@ export class Physics {
    * (so you climb curbs and stairs but do not teleport onto roofs).
    */
   groundHeight(x: number, z: number, r: number, maxTop: number, includeDyn = true): number {
-    let best = 0;
+    let best = this.floorAt(x, z, r);
     const c = this.query(x - r, z - r, x + r, z + r);
     for (let i = 0; i < c.length; i++) {
       const b = c[i];

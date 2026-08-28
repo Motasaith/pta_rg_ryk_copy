@@ -508,6 +508,10 @@ export interface Mats {
   curb: THREE.MeshStandardMaterial;
   grass: THREE.MeshStandardMaterial;
   dirt: THREE.MeshStandardMaterial;
+  /** Themed ground covers. Only the map that needs one ever draws with it. */
+  sand: THREE.MeshStandardMaterial;
+  forestFloor: THREE.MeshStandardMaterial;
+  cobble: THREE.MeshStandardMaterial;
   brick: THREE.MeshStandardMaterial;
   roof: THREE.MeshStandardMaterial;
   metal: THREE.MeshStandardMaterial;
@@ -562,6 +566,14 @@ export function buildMaterials(bank?: AssetBank): Mats {
       ?? bumpy('grass', tex.grass(), 0.5, { roughness: 1 }),
     dirt: real('dirt', {})
       ?? bumpy('dirt', tex.dirt(), 0.9, { roughness: 1 }),
+    // Desert dune sand, pine-needle litter and a cobbled village lane. Each falls back to
+    // a tinted procedural texture when the download is missing, exactly like everything else.
+    sand: real('aerial_sand', { color: 0xd9bd8e })
+      ?? bumpy('sand', tex.dirt(), 0.5, { color: 0xd9bf8a, roughness: 1 }),
+    forestFloor: real('forest_ground_04', {})
+      ?? bumpy('forestfloor', tex.dirt(), 1.1, { color: 0x6f6a44, roughness: 1 }),
+    cobble: real('cobblestone_floor_02', {})
+      ?? bumpy('cobble', tex.concrete(), 2.2, { color: 0x9a948b, roughness: 0.92 }),
     brick: real('brick_wall_09', {})
       ?? bumpy('brick', tex.brick(), 2.6, { roughness: 0.92 }),
     roof: real('clay_roof_tiles_02', {})

@@ -174,6 +174,27 @@ export class GameAudio {
     this.tone('triangle', 1318, 1318, 0.14, 0.14, 0.06);
   }
 
+  cheat(): void {
+    if (!this.ctx) return;
+    // Iconic GTA-style double harmonic chime
+    this.tone('triangle', 523.25, 523.25, 0.12, 0.2, 0);       // C5
+    this.tone('triangle', 659.25, 659.25, 0.12, 0.2, 0.08);    // E5
+    this.tone('triangle', 783.99, 783.99, 0.14, 0.22, 0.16);   // G5
+    this.tone('triangle', 1046.5, 1046.5, 0.25, 0.25, 0.24);   // C6
+  }
+
+  carAlarm(vol = 1): void {
+    if (!this.ctx) return;
+    this.tone('sawtooth', 920, 720, 0.12, 0.18 * vol);
+    this.tone('square', 1400, 1100, 0.08, 0.12 * vol, 0.1);
+  }
+
+  carDoorSlam(): void {
+    if (!this.ctx) return;
+    this.burst(0.12, 0.45, 550, 1.4, 'lowpass');
+    this.tone('square', 130, 45, 0.1, 0.22);
+  }
+
   dryFire(): void { this.tone('square', 900, 500, 0.04, 0.06); }
   reload(): void {
     this.tone('square', 300, 180, 0.06, 0.07);

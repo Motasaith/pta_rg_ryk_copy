@@ -77,6 +77,15 @@ export interface MinimapData {
   labels: { t: string; x: number; z: number }[];
 }
 
+/** A body of water the engine has to treat as lethal: drop below `surface` and you drown. */
+export interface WaterZone {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+  surface: number;
+}
+
 export interface City {
   root: THREE.Group;
   nodes: RoadNode[];
@@ -92,6 +101,10 @@ export interface City {
   policeStation: { x: number; z: number };
   hospital: { x: number; z: number };
   bounds: WorldBounds;
+  waterZones: WaterZone[];
+  /** Which map in maps.ts produced this world. */
+  mapId: string;
+  mapName: string;
   lampGlow: THREE.Points;
   setNight(n: number): void;
   triangles: number;
@@ -110,13 +123,14 @@ export interface Collect {
   lampPts: number[];
   signs: THREE.Mesh[];
   nodes: RoadNode[];
+  waterZones: WaterZone[];
 }
 
 export function newCollect(): Collect {
   return {
     minimap: { roads: [], blocks: [], buildings: [], parks: [], water: [], labels: [] },
     pedLoops: [], parkSpots: [], roadSpawns: [], shops: [], pois: [],
-    itemSpots: [], pickupSpots: [], lampPts: [], signs: [], nodes: [],
+    itemSpots: [], pickupSpots: [], lampPts: [], signs: [], nodes: [], waterZones: [],
   };
 }
 
@@ -244,6 +258,52 @@ export function tree(B: Builder, phys: Physics, rng: Rng, x: number, z: number, 
   B.sphere(m.foliage, x - 0.55 * s, top + 1.35 * s, z - 0.4 * s, 0.8 * s, 8, 6, 0.9);
   if (rng() > 0.5) B.sphere(m.foliage, x + 0.1 * s, top + 2.1 * s, z - 0.1 * s, 0.7 * s, 8, 6, 0.9);
   phys.addCentered(x, z, 0.3 * s, 0.3 * s, 0, baseY + h * 0.8, KIND.Prop);
+}
+
+/** Date palm: a bare leaning trunk with a crown of drooping fronds. Desert map. */
+export function palm(B: Builder, phys: Physics, rng: Rng, x: number, z: number, s: number, baseY = WALK_Y): void {
+  const m = M!;
+  const h = 6.2 * s;
+  const lean = (rng() - 0.5) * 0.16;
+  // the trunk is four stacked segments so the lean reads as a curve, not a tilted pole
+  for (let i = 0; i < 4; i++) {
+    const t = i / 4;
+    B.cyl(m.trunk, x + lean * h * t * t, baseY + h * (t + 0.125), z, 0.16 * s, 0.21 * s, h / 4 + 0.05, 7);
+  }
+  const tx = x + lean * h, ty = baseY + h;
+  for (let a = 0; a < 9; a++) {
+    const an = (a / 9) * Math.PI * 2 + rng() * 0.3;
+    const r = 1.9 * s;
+    B.box(m.foliage, tx + Math.cos(an) * r * 0.55, ty + 0.35 * s, z + Math.sin(an) * r * 0.55,
+      r * 1.25, 0.1, 0.45 * s, -an, 0);
+  }
+  B.sphere(m.foliage, tx, ty + 0.15 * s, z, 0.55 * s, 8, 6, 0.8);
+  phys.addCentered(x, z, 0.28 * s, 0.28 * s, 0, baseY + h * 0.8, KIND.Prop);
+}
+
+/** Conifer: a straight trunk under three stacked cones. Pine valley map. */
+export function pine(B: Builder, phys: Physics, rng: Rng, x: number, z: number, s: number, baseY = WALK_Y): void {
+  const m = M!;
+  const h = 3.1 * s;
+  B.cyl(m.trunk, x, baseY + h / 2, z, 0.14 * s, 0.24 * s, h, 7);
+  const top = baseY + h * 0.42;
+  const jitter = rng() * 0.5;
+  B.cone(m.foliage, x, top + 1.5 * s, z, 2.05 * s, 3.4 * s, 9, jitter);
+  B.cone(m.foliage, x, top + 3.5 * s, z, 1.5 * s, 3.0 * s, 9, jitter + 0.4);
+  B.cone(m.foliage, x, top + 5.3 * s, z, 0.95 * s, 2.6 * s, 8, jitter + 0.8);
+  phys.addCentered(x, z, 0.32 * s, 0.32 * s, 0, baseY + h * 0.9, KIND.Prop);
+}
+
+export type Species = 'broadleaf' | 'palm' | 'pine';
+
+/** One call site for every map: the theme picks the species, the generator stays the same. */
+export function plant(
+  B: Builder, phys: Physics, rng: Rng, x: number, z: number, s: number,
+  species: Species = 'broadleaf', baseY = WALK_Y,
+): void {
+  if (species === 'palm') palm(B, phys, rng, x, z, s, baseY);
+  else if (species === 'pine') pine(B, phys, rng, x, z, s, baseY);
+  else tree(B, phys, rng, x, z, s, baseY);
 }
 
 export function lamp(

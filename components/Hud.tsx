@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useRef, useState } from 'react';
 import { HudState } from '@/game/hudstore';
 import { WEAPONS } from '@/game/weapons';
 
@@ -8,11 +9,14 @@ const WEAPON_KEY: Record<string, string> = {
 };
 
 export function Hud({
-  hud, radarRef, showPerf,
+  hud, radarRef, showPerf, cheatHints, onCheat, onCloseCheat,
 }: {
   hud: HudState;
   radarRef: React.RefObject<HTMLCanvasElement>;
   showPerf: boolean;
+  cheatHints: { code: string; hint: string }[];
+  onCheat: (code: string) => void;
+  onCloseCheat: () => void;
 }) {
   const playing = hud.phase === 'playing' || hud.phase === 'dead';
   const spec = WEAPONS[hud.weapon];
@@ -56,8 +60,13 @@ export function Hud({
         </div>
       )}
 
-      {/* objective + toast */}
+      {/* objective + toast + cheat notification */}
       <div className="topcentre">
+        {hud.cheatMessage && (
+          <div className="cheatbanner">
+            <span className="cheatstar">★</span> {hud.cheatMessage} <span className="cheatstar">★</span>
+          </div>
+        )}
         {hud.objective && <div className="objective">{hud.objective}</div>}
         {hud.toast && <div className="toast">{hud.toast}</div>}
       </div>
@@ -136,7 +145,21 @@ export function Hud({
       </div>
 
       {/* interaction prompt */}
-      {hud.prompt && <div className="prompt">{hud.prompt}</div>}
+      {hud.prompt && !hud.cheatConsoleOpen && <div className="prompt">{hud.prompt}</div>}
+
+      {hud.cheatConsoleOpen && (
+        <CheatConsole hints={cheatHints} onSubmit={onCheat} onClose={onCloseCheat} />
+      )}
+
+      {hud.drowning > 0 && (
+        <>
+          <div className="drownveil" style={{ opacity: 0.25 + hud.drowning * 0.5 }} />
+          <div className="drownwarn">
+            DROWNING
+            <i style={{ width: `${Math.round((1 - hud.drowning) * 100)}%` }} />
+          </div>
+        </>
+      )}
 
       {showPerf && (
         <div className="perf">
@@ -146,6 +169,65 @@ export function Hud({
 
       <div className="vignette" />
       {hud.health < 32 && hud.phase === 'playing' && <div className="lowhp" />}
+    </div>
+  );
+}
+
+/**
+ * The cheat prompt.
+ *
+ * It is a real text field, focused on open, so the browser — not the game — owns the
+ * keystrokes. That is the whole point: every letter of HESOYAM is also a gameplay bind,
+ * and typing cheats into the world fired guns instead of granting money.
+ */
+function CheatConsole({ hints, onSubmit, onClose }: {
+  hints: { code: string; hint: string }[];
+  onSubmit: (code: string) => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  const [text, setText] = useState('');
+
+  useEffect(() => {
+    ref.current?.focus();
+  }, []);
+
+  const matches = text.trim()
+    ? hints.filter((h) => h.code.startsWith(text.trim().toUpperCase())).slice(0, 6)
+    : hints.slice(0, 6);
+
+  return (
+    <div className="cheatconsole">
+      <div className="cheatlist">
+        {matches.map((h) => (
+          <button
+            key={h.code}
+            className="cheathint"
+            // the field must keep the caret, so run the cheat without ever taking focus
+            onMouseDown={(e) => { e.preventDefault(); onSubmit(h.code); setText(''); }}
+          >
+            <b>{h.code}</b>
+            <span>{h.hint}</span>
+          </button>
+        ))}
+      </div>
+      <div className="cheatinput">
+        <span className="caret">&gt;</span>
+        <input
+          ref={ref}
+          value={text}
+          spellCheck={false}
+          autoComplete="off"
+          placeholder="type a cheat and press ENTER"
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter') { onSubmit(text); setText(''); }
+            else if (e.key === 'Escape' || e.key === '`' || e.key === '~') { e.preventDefault(); onClose(); }
+          }}
+        />
+        <span className="cheatkey">` to close</span>
+      </div>
     </div>
   );
 }

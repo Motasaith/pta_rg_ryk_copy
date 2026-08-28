@@ -77,9 +77,22 @@ export class Input {
   };
 
   private onBlur = () => {
-    this.down.clear();
-    this.buttons = [false, false, false];
+    this.reset();
   };
+
+  /**
+   * Forget every held key and button.
+   *
+   * Called when control is handed to something that types — the cheat console, a menu —
+   * because those keystrokes never produce a matching keyup for the game, and a key stuck
+   * "down" is a character who walks into a wall the moment you close the console.
+   */
+  reset(): void {
+    this.down.clear();
+    this.edge.clear();
+    this.buttons = [false, false, false];
+    this.buttonEdge = [false, false, false];
+  }
 
   private onMouseMove = (e: MouseEvent) => {
     if (!this.locked || !this.enabled) return;

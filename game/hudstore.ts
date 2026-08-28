@@ -37,6 +37,14 @@ export interface HudState {
   mapOpen: boolean;
   shopOpen: boolean;
   shopName: string;
+  /** transient "CHEAT ACTIVATED" banner */
+  cheatMessage: string | null;
+  /** the cheat prompt is up: gameplay input is off and the mouse is free */
+  cheatConsoleOpen: boolean;
+  /** name of the map currently loaded, for the pause screen */
+  mapName: string;
+  /** 0..1 how far under water we are; the HUD tints and warns */
+  drowning: number;
   /* multiplayer */
   netStatus: 'offline' | 'connecting' | 'online' | 'error';
   netRoom: string;
@@ -64,7 +72,8 @@ const initial: HudState = {
   prompt: '', toast: '', objective: '', found: 0, total: 8,
   clock: '00:00', hour: 11, fps: 0, triangles: 0, drawCalls: 0,
   aiming: false, hitMarker: 0, crosshairHot: false, busted: false, mapOpen: false,
-  shopOpen: false, shopName: '',
+  shopOpen: false, shopName: '', cheatMessage: null, cheatConsoleOpen: false,
+  mapName: '', drowning: 0,
   netStatus: 'offline', netRoom: '', netError: '', netPeers: 0, netNames: [],
   netTeam: 0, netHost: false, netMode: 0, netMatch: 0,
   netScoreA: 0, netScoreB: 0, netTarget: 0, netRoster: [], netFeed: [],

@@ -37,7 +37,14 @@ export const SCHEME_WEST = -120;    // 40' road (city grid line)
 export const SCHEME_EAST = 200;     // Link Rd — the plan's "existing road"
 export const SCHEME_BLVD = -40;     // 50' boulevard (city grid line)
 export const SCHEME_MID = 120;      // 30' street (city grid line)
-export const SCHEME_TOP = 208;      // just south of the city's z = 200 arterial
+/**
+ * North edge of the scheme.
+ *
+ * It used to butt straight onto the city's z = 200 arterial. The Grand Canal now runs
+ * through the gap, so the whole society sits 100 m further south and the four streets
+ * reach the city over the bridges instead of a kerb line.
+ */
+export const SCHEME_TOP = 308;
 
 type Band =
   | { kind: 'road'; w: number; centre: number }

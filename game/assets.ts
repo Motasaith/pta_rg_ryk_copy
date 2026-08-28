@@ -36,6 +36,10 @@ const TEX_REPEAT: Record<string, number> = {
   painted_plaster_wall: 1,
   clay_plaster: 1,
   yellow_plaster: 1,
+  // themed map grounds (desert / pine valley / village)
+  aerial_sand: 1,
+  forest_ground_04: 1.5,
+  cobblestone_floor_02: 1,
 };
 
 const HDRI_URL = '/assets/hdri/urban_street_01_2k.hdr';

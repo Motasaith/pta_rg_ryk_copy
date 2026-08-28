@@ -5,7 +5,8 @@ import { buildMaterials, glowTexture, initTextures, Mats, updateFoliage } from '
 import { AssetBank } from './assets';
 import { updateWater } from './water';
 import { Sky } from './sky';
-import { buildCity, City, LOT_Y, Shop } from './city';
+import { City, LOT_Y, Poi, Shop } from './city';
+import { DEFAULT_MAP_ID, GameMap, mapById } from './maps';
 import {
   createHumanoid, disposeHumanoid, Humanoid, poseHumanoid, setHumanoidDetail, SKINS,
 } from './humanoid';
@@ -27,9 +28,12 @@ import {
 } from './protocol';
 import { createWeaponModel, WeaponId, WeaponModel, WEAPON_ORDER, WEAPONS, WeaponSpec } from './weapons';
 import {
-  CAR_COLOURS, initVehicleModels, placeVehicle, seatWorld, stepVehicle, updateVehicleBox, Vehicle,
-  vehicleSpeedKmh,
+  CAR_COLOURS, createVehicle, initVehicleModels, placeVehicle, seatWorld, stepVehicle, updateAlarm, updateVehicleBox, Vehicle,
+  VehKind, vehicleSpeedKmh,
 } from './vehicle';
+
+/** Seconds under water before the canal has finished with you. */
+const DROWN_SECONDS = 4.2;
 
 const WALK_SPEED = 2.3;
 const CROUCH_SPEED = 1.35;
@@ -141,6 +145,22 @@ export class Game {
   private prompt = '';
   private promptAction: (() => void) | null = null;
   private toastT = 0;
+  private alarmChirpT = 0;
+  private cheatMsgT = 0;
+  /** UNLIMITEDHEALTH: damage is ignored entirely. */
+  private invincible = false;
+  private speedFreak = false;
+  /** Console open? While it is, every gameplay bind is dead and the mouse is free. */
+  private consoleOpen = false;
+  /** How long we have been under water, in seconds. */
+  private drownT = 0;
+  /** WALKONWATER: the canal stops being lethal. */
+  private waterproof = false;
+  /** The map currently built. Exactly one world exists at a time. */
+  private map: GameMap = mapById(DEFAULT_MAP_ID);
+  private worldBuilt = false;
+  /** Clock hour the chosen map opens on; the day/night cycle counts up from it. */
+  private startHour = 9.5;
 
   // loop
   private raf = 0;
@@ -239,24 +259,7 @@ export class Game {
       this.setEnvIntensity(this.sky.hour);
     }
 
-    await step(30, 'surveying Rahim Garden City…');
-    this.city = buildCity(this.scene, this.phys, this.mats, this.preset);
-    this.mapR = new MapRenderer(this.city);
-
-    await step(58, 'moving the neighbours in…');
-    this.peds = new PedManager(this.scene, this.phys, this.city);
-    this.peds.populate(this.preset.peds);
-
-    await step(72, 'starting the traffic…');
-    this.traffic = new Traffic(this.scene, this.city, this.phys);
-    this.traffic.spawn(this.preset.traffic);
-    this.traffic.spawnParked(Math.round(this.preset.traffic * 0.9));
-
-    // seed the crowd and the traffic around where the player will actually start
-    this.peds.streamTo(this.city.playerStart.x, this.city.playerStart.z, 95);
-    this.traffic.streamTo(this.city.playerStart.x, this.city.playerStart.z, 170);
-
-    await step(84, 'loading the guns…');
+    await step(60, 'loading the guns…');
     this.remotes = new RemotePlayers(this.scene);
     this.net.onChange = () => this.onNetChange();
     // We own our own health, so damage arrives as a request and is applied here.
@@ -267,31 +270,20 @@ export class Game {
     this.combat = new Combat(this.scene, this.phys);
     this.combat.bloodEnabled = this.settings.blood;
     this.combat.onExplosion = (ex, ey, ez, damage, radius) => this.onExplosion(ex, ey, ez, damage, radius);
-    this.spawnPlayer();
     this.setWeapon('fists', true);
 
-    await step(92, 'hiding Mom\'s things…');
-    this.spawnItems();
-    this.spawnPickups();
-
-    await step(98, 'warming up the renderer…');
-    this.renderer.compile(this.scene, this.camera);
-    this.renderer.render(this.scene, this.camera);
-
+    // No world yet: the map the player picks on the title screen is built by start(),
+    // so only the one they chose ever occupies memory.
     await step(100, 'ready');
-    {
-      const roadImg = this.mats.asphalt.map?.image as { constructor?: { name?: string } } | undefined;
-      setHud({ loadMsg: `${this.bank.status()} · road=${roadImg?.constructor?.name ?? 'none'}` });  // TEMP DEBUG
-    }
-    setHud({
-      phase: 'title', total: this.items.length, triangles: Math.round(this.city.triangles),
-      money: this.money, health: 100,
-    });
+    setHud({ loadMsg: this.bank.status(), phase: 'title', money: this.money, health: 100 });
 
     this.input.attach();
     this.input.onLockChange = (locked) => {
       // Esc releases the pointer: treat that as "pause" so the player never loses control.
-      if (!locked && this.running && !this.paused && getHud().phase === 'playing') this.setPaused(true);
+      // The cheat console and the shop release the pointer on purpose — only an
+      // unexplained loss (Esc, alt-tab) means the player wants out.
+      if (!locked && this.running && !this.paused && !this.consoleOpen
+        && !getHud().shopOpen && getHud().phase === 'playing') this.setPaused(true);
     };
     addEventListener('resize', this.onResize);
   }
@@ -409,8 +401,18 @@ export class Game {
 
   /* ── lifecycle ─────────────────────────────────────────────────────────── */
 
-  start(): void {
-    if (this.running || !this.traffic || !this.hero) return;
+  /**
+   * Build the chosen map, then play.
+   *
+   * The world is generated here rather than during init() so that picking a map on the
+   * title screen means only that map exists: one set of meshes, one collider grid, one
+   * crowd, one traffic fleet. Calling start() again is a no-op once a world is up —
+   * switching maps is a page reload, which is also how the restart button works.
+   */
+  async start(mapId = DEFAULT_MAP_ID): Promise<void> {
+    if (this.running) return;
+    if (!this.worldBuilt) await this.buildWorld(mapId);
+    if (!this.traffic || !this.hero) return;
     this.running = true;
     this.paused = false;
     this.startT = performance.now();
@@ -423,17 +425,61 @@ export class Game {
     this.loop();
   }
 
+  private async buildWorld(mapId: string): Promise<void> {
+    const step = async (pct: number, msg: string) => {
+      setHud({ phase: 'loading', loadPct: pct, loadMsg: msg });
+      await new Promise<void>((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+    };
+    this.map = mapById(mapId);
+    this.worldBuilt = true;
+
+    await step(8, `surveying ${this.map.name}…`);
+    this.city = this.map.build(this.scene, this.phys, this.mats, this.preset);
+    this.mapR = new MapRenderer(this.city);
+    this.startHour = this.map.hour;
+    this.sky.setHour(this.settings.dayNight ? this.map.hour : 12);
+    this.setEnvIntensity(this.sky.hour);
+
+    await step(42, 'moving the neighbours in…');
+    this.peds = new PedManager(this.scene, this.phys, this.city);
+    this.peds.populate(this.preset.peds);
+
+    await step(62, 'starting the traffic…');
+    this.traffic = new Traffic(this.scene, this.city, this.phys);
+    this.traffic.spawn(this.preset.traffic);
+    this.traffic.spawnParked(Math.round(this.preset.traffic * 0.9));
+    // seed the crowd and the traffic around where the player will actually start
+    this.peds.streamTo(this.city.playerStart.x, this.city.playerStart.z, 95);
+    this.traffic.streamTo(this.city.playerStart.x, this.city.playerStart.z, 170);
+    if (this.net.status !== 'offline') this.traffic.resizeLanes(MAX_SYNC_CARS);
+
+    await step(80, "hiding Mom's things…");
+    this.spawnPlayer();
+    this.spawnItems();
+    this.spawnPickups();
+
+    await step(94, 'warming up the renderer…');
+    this.renderer.compile(this.scene, this.camera);
+    this.renderer.render(this.scene, this.camera);
+
+    setHud({
+      loadPct: 100, total: this.items.length,
+      triangles: Math.round(this.city.triangles), mapName: this.city.mapName,
+    });
+  }
+
   setPaused(p: boolean): void {
     if (this.paused === p) return;
+    if (p) this.toggleConsole(false);
     this.paused = p;
-    this.input.enabled = !p;
+    this.input.enabled = !p && !this.consoleOpen;
     setHud({ phase: p ? 'paused' : 'playing' });
     if (p) {
       this.audio.suspend();
       this.input.releaseLock();
     } else {
       this.audio.resume();
-      this.input.requestLock();
+      if (!this.consoleOpen) this.input.requestLock();
       this.clock.getDelta();
     }
   }
@@ -498,7 +544,8 @@ export class Game {
    * at load keeps single-player exactly as it was.
    */
   private goOnline(): void {
-    this.traffic.resizeLanes(MAX_SYNC_CARS);
+    // The fleet does not exist until a map is built; buildWorld() re-applies this.
+    this.traffic?.resizeLanes(MAX_SYNC_CARS);
   }
 
   /** Returns false if the code could not possibly be a room code. */
@@ -696,7 +743,7 @@ export class Game {
     if (this.net.status !== 'offline') this.remotes.collisionBoxes(this.phys.dyn);
 
     if (this.settings.dayNight) {
-      this.sky.setHour(9.5 + t / 90);   // a full day every 36 minutes
+      this.sky.setHour(this.startHour + t / 90);   // a full day every 36 minutes
       this.city.setNight(this.sky.night);
       if (this.scene.environment) this.setEnvIntensity(this.sky.hour);
       if (this.scene.fog instanceof THREE.Fog) this.scene.fog.color.copy(this.sky.fogColor());
@@ -725,6 +772,12 @@ export class Game {
     this.combat.update(dt);
     this.updateItems(dt, t);
     this.updateInteraction();
+    this.updateDrowning(dt);
+
+    if (this.cheatMsgT > 0) {
+      this.cheatMsgT -= dt;
+      if (this.cheatMsgT <= 0) setHud({ cheatMessage: null });
+    }
 
     // Living world: wind through the leaves and light on the water. Two uniform writes —
     // no extra render passes, which is why they cost nothing measurable.
@@ -785,19 +838,18 @@ export class Game {
     if (this.input.justPressed('crouch')) {
       this.crouching = !this.crouching;
     }
-    const sprint = this.input.isDown('sprint') && !this.aiming;
-    if (sprint || !this.grounded) {
-      this.crouching = false;
-    }
-
     const fwd = this.input.axis('back', 'forward');
     const strafe = this.input.axis('left', 'right');
     let wx = this.rig.forwardX() * fwd + this.rig.rightX() * strafe;
     let wz = this.rig.forwardZ() * fwd + this.rig.rightZ() * strafe;
     const l = Math.hypot(wx, wz);
     if (l > 1) { wx /= l; wz /= l; }
-
-    const maxSpeed = this.crouching ? CROUCH_SPEED : this.aiming ? AIM_SPEED : sprint ? RUN_SPEED : WALK_SPEED;
+    const sprint = this.input.isDown('sprint') && !this.aiming && !this.crouching && l > 0;
+    if (sprint || !this.grounded) {
+      this.crouching = false;
+    }
+    const mult = this.speedFreak ? 2.0 : 1.0;
+    const maxSpeed = this.crouching ? CROUCH_SPEED : this.aiming ? AIM_SPEED : sprint ? RUN_SPEED * mult : WALK_SPEED * mult;
     const targetX = wx * maxSpeed, targetZ = wz * maxSpeed;
     const accel = l > 0 ? 16 : 12;
     this.vx = damp(this.vx, targetX, accel, dt);
@@ -911,6 +963,15 @@ export class Game {
     this.py = v.y;
     this.audio.engineRpm(v.speed, v.spec.maxSpeed, c.throttle + (v.boosting ? 0.4 : 0));
 
+    updateAlarm(v, dt, t);
+    if (v.alarmT > 0) {
+      this.alarmChirpT -= dt;
+      if (this.alarmChirpT <= 0) {
+        this.audio.carAlarm(0.9);
+        this.alarmChirpT = 0.28;
+      }
+    }
+
     if (v.crashT > 0.3) {
       this.audio.crash(Math.abs(v.speed) + 6);
       this.rig.shake = Math.min(1.2, this.rig.shake + 0.5);
@@ -953,6 +1014,40 @@ export class Game {
     this.audio.engineOn();
     this.audio.ui();
     setHud({ inVehicle: true, vehicleName: v.spec.name, vehicleClass: v.spec.cls.toUpperCase() });
+  }
+
+  private hijackVehicle(v: Vehicle): void {
+    // Eject civilian driver onto the ground beside the vehicle
+    const rx = rgtX(v.yaw), rz = rgtZ(v.yaw);
+    const throwX = v.x - rx * (v.spec.halfW + 0.95);
+    const throwZ = v.z - rz * (v.spec.halfW + 0.95);
+    const ped = this.peds.spawnPed(false, throwX, throwZ);
+    ped.flinch = 0.85;
+    ped.state = 'flee';
+    ped.fleeT = 14;
+    ped.fleeFromX = this.px;
+    ped.fleeFromZ = this.pz;
+    this.combat.bloodBurst(throwX, v.y + 0.55, throwZ, -rx, 0.4, -rz, 4);
+
+    this.audio.punch();
+    this.audio.bodyHit();
+    this.audio.carDoorSlam();
+
+    // 25% chance of car alarm triggering
+    const alarm = Math.random() < 0.25;
+    if (alarm) {
+      v.alarmT = 12.0;
+      this.toast('⚠️ CAR ALARM TRIGGERED!');
+      this.audio.carAlarm(1.0);
+      this.addWanted(0.5);
+      this.peds.panic(v.x, v.z, 32, 8);
+    } else {
+      this.toast(`Hijacked the ${v.spec.name}!`);
+      this.addWanted(0.15);
+      this.peds.panic(v.x, v.z, 16, 5);
+    }
+
+    this.enterVehicle(v);
   }
 
   private exitVehicle(): void {
@@ -1435,7 +1530,7 @@ export class Game {
   }
 
   private damagePlayer(amount: number, fromX: number, fromZ: number, shake: boolean, from = 0): void {
-    if (this.dead) return;
+    if (this.dead || this.invincible) return;
     if (from) {
       this.lastAttacker = from;
       this.lastAttackerT = this.elapsed;
@@ -1456,6 +1551,7 @@ export class Game {
     this.health = 0;
     this.dead = true;
     this.deadT = 0;
+    this.drownT = 0;
     // Only we can report our own death, so the room counts it exactly once however many
     // people were shooting. Credit expires so an old bullet cannot steal a road accident.
     if (this.net.online) {
@@ -1476,7 +1572,7 @@ export class Game {
       this.vehicle = null;
     }
     this.combat.bloodPool(this.px, this.py, this.pz, 1.8);
-    setHud({ phase: 'dead', inVehicle: false, health: 0 });
+    setHud({ phase: 'dead', inVehicle: false, health: 0, drowning: 0 });
   }
 
   private busted(): void {
@@ -1518,6 +1614,8 @@ export class Game {
     this.deadT = 0;
     this.crouching = false;
     this.speed = 0;
+    this.drownT = 0;
+    setHud({ drowning: 0 });
     this.peds.removeCops();
     for (const v of [...this.traffic.cars]) if (v.kind === 'police' && !v.isPlayer) this.traffic.remove(v);
     this.audio.sirenOff();
@@ -1578,6 +1676,27 @@ export class Game {
       if (near > bestScore) { bestScore = near; best = s; }
     }
     return best;
+  }
+
+  /** The POI the bridge registered, falling back to the middle of the channel. */
+  private landmark(kind: Poi['kind']): { x: number; z: number } {
+    const p = this.city.pois.find((q) => q.name === this.map.bridge)
+      ?? this.city.pois.find((q) => q.kind === kind);
+    return p ?? { x: 0, z: 0 };
+  }
+
+  /** teleport(), but it takes whatever you are driving along with you. */
+  private warp(x: number, z: number): void {
+    const v = this.vehicle;
+    if (v) {
+      placeVehicle(v, x, z, v.yaw);
+      v.y = this.phys.groundHeight(x, z, v.spec.halfW, 3, false);
+      v.speed = 0;
+      v.vx = 0;
+      v.vz = 0;
+      updateVehicleBox(v);
+    }
+    this.teleport(x, z);
   }
 
   private teleport(x: number, z: number): void {
@@ -1685,8 +1804,13 @@ export class Game {
       const v = this.traffic.nearest(this.px, this.pz, 3.6);
       const shop = this.nearestShop();
       if (v && Math.abs(v.speed) < 6) {
-        text = `E — drive the ${v.spec.name.toLowerCase()}`;
-        this.promptAction = () => this.enterVehicle(v);
+        const isOccupied = v.ai !== null || v.driver !== null;
+        text = isOccupied
+          ? `E — hijack the ${v.spec.name.toLowerCase()}`
+          : `E — drive the ${v.spec.name.toLowerCase()}`;
+        this.promptAction = isOccupied
+          ? () => this.hijackVehicle(v)
+          : () => this.enterVehicle(v);
       } else if (shop) {
         text = `E — ${shop.name} (Shop & Ammo)`;
         this.promptAction = () => this.openShop(shop.name);
@@ -1781,6 +1905,219 @@ export class Game {
     this.toast('Health restored to 100%');
     setHud({ money: this.money, health: this.health });
     return true;
+  }
+
+  /* ── cheat console ──────────────────────────────────────── */
+
+  /**
+   * Cheats are typed into a console, not blind into the world.
+   *
+   * Typing them blind is what a console-era GTA did because a controller has no letters.
+   * On a keyboard every letter is already a gameplay bind — B and G and the number row
+   * throw grenades and swap weapons — so spelling HESOYAM mid-game emptied a magazine
+   * into a wall and never registered. The backtick key opens a prompt instead: gameplay
+   * input is switched off, the pointer is released, and the code is submitted with Enter.
+   */
+  toggleConsole(open?: boolean): void {
+    const want = open ?? !this.consoleOpen;
+    if (want === this.consoleOpen) return;
+    this.consoleOpen = want;
+    // The world keeps rendering underneath; only the player's controls go away.
+    this.input.enabled = !want;
+    this.input.reset();
+    setHud({ cheatConsoleOpen: want });
+    if (want) this.input.releaseLock();
+    else if (this.running && !this.paused && !this.mapOpen && !getHud().shopOpen) this.input.requestLock();
+  }
+
+  get cheatConsoleOpen(): boolean {
+    return this.consoleOpen;
+  }
+
+  /** Every cheat, its aliases, and what it does. Also drives the in-console hint list. */
+  private static readonly CHEATS: { codes: string[]; label: string; hint: string }[] = [
+    { codes: ['HESOYAM', 'ASPIRINE'], label: 'HEALTH + ARMOUR + Rs.250,000', hint: 'patch up and get paid' },
+    { codes: ['BAGUVIX', 'UNLIMITEDHEALTH'], label: 'UNLIMITED HEALTH', hint: 'nothing can hurt you' },
+    { codes: ['FULLCLIP', 'NUTTERTOOLS', 'GUNSGUNSGUNS'], label: 'MAX AMMO, EVERY WEAPON', hint: 'fill every magazine' },
+    { codes: ['LEAVEMEALONE', 'TURNDOWNTHEHEAT', 'LAWYERUP'], label: 'WANTED LEVEL CLEARED', hint: 'lose the police' },
+    { codes: ['BRINGITON', 'MOREPOLICE'], label: 'FIVE-STAR WANTED LEVEL', hint: 'bring the police' },
+    { codes: ['SPEEDFREAK', 'CATCHME'], label: 'SPEED FREAK', hint: 'run twice as fast' },
+    { codes: ['PANZER', 'GIVEPOLICE'], label: 'POLICE CRUISER SPAWNED', hint: 'spawn a cruiser' },
+    { codes: ['GETTHEREFAST', 'SPAWNSUPER'], label: 'HYPERCAR SPAWNED', hint: 'spawn a hypercar' },
+    { codes: ['ROCKETMAN'], label: 'ROCKETMAN', hint: 'launch yourself' },
+    { codes: ['BIGBANG', 'KILLALL'], label: 'BIG BANG', hint: 'blow up nearby traffic' },
+    { codes: ['TIMEFLIES', 'CLOCKON'], label: 'TIME OF DAY ADVANCED', hint: 'skip six hours' },
+    { codes: ['WALKONWATER', 'DRYDOCK'], label: 'DROWNING DISABLED', hint: 'survive the canal' },
+    { codes: ['TAKEMETOTHEPUL', 'GOTOBRIDGE'], label: 'AT THE BRIDGE', hint: 'jump to the big bridge' },
+    { codes: ['TAKEMEHOME', 'GOHOME'], label: 'BACK AT HOME', hint: 'jump to your front door' },
+  ];
+
+  /** The list the console shows when you have not typed anything yet. */
+  static cheatHints(): { code: string; hint: string }[] {
+    return Game.CHEATS.map((c) => ({ code: c.codes[0], hint: c.hint }));
+  }
+
+  /**
+   * Run whatever was typed. Returns false for an unknown code so the console can say so
+   * rather than silently swallowing a typo.
+   */
+  submitCheat(raw: string): boolean {
+    const code = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!code) return false;
+    const entry = Game.CHEATS.find((c) => c.codes.includes(code));
+    if (!entry) {
+      this.cheatMsgT = 2.4;
+      setHud({ cheatMessage: `UNKNOWN CHEAT “${code}”` });
+      return false;
+    }
+    let label = entry.label;
+    switch (entry.codes[0]) {
+      case 'HESOYAM':
+        this.money += 250000;
+        this.health = 100;
+        this.armour = 100;
+        if (this.vehicle) this.vehicle.health = 100;
+        break;
+      case 'BAGUVIX':
+        this.invincible = !this.invincible;
+        label = `UNLIMITED HEALTH ${this.invincible ? 'ON' : 'OFF'}`;
+        break;
+      case 'FULLCLIP':
+        for (const id of WEAPON_ORDER) {
+          const spec = WEAPONS[id];
+          if (spec.melee) continue;
+          this.reserve[id] = spec.reserveMax;
+          this.mag[id] = spec.mag;
+        }
+        break;
+      case 'LEAVEMEALONE':
+        this.wanted = 0;
+        this.wantedCool = 0;
+        this.peds.removeCops();
+        break;
+      case 'BRINGITON':
+        this.wanted = 5;
+        this.wantedCool = 45;
+        break;
+      case 'SPEEDFREAK':
+        this.speedFreak = !this.speedFreak;
+        label = `SPEED FREAK ${this.speedFreak ? 'ON' : 'OFF'}`;
+        break;
+      case 'PANZER': this.spawnCheatVehicle('police'); break;
+      case 'GETTHEREFAST': this.spawnCheatVehicle('hyper'); break;
+      case 'ROCKETMAN':
+        this.vy += 22;
+        this.grounded = false;
+        this.crouching = false;
+        this.audio.jump();
+        break;
+      case 'BIGBANG':
+        for (const v of this.traffic.cars) {
+          if (v.isPlayer || dist2(v.x, v.z, this.px, this.pz) > 45 * 45) continue;
+          v.health = 0;
+          this.combat.explode(v.x, v.y + 0.5, v.z, 100, 7);
+          this.audio.explosion();
+        }
+        break;
+      case 'TIMEFLIES':
+        this.startHour = (this.startHour + 6) % 24;
+        this.sky.setHour(this.startHour);
+        label = `CLOCK SET TO ${String(Math.floor(this.startHour)).padStart(2, '0')}:00`;
+        break;
+      case 'WALKONWATER':
+        this.waterproof = !this.waterproof;
+        label = `DROWNING ${this.waterproof ? 'DISABLED' : 'ENABLED'}`;
+        break;
+      case 'TAKEMETOTHEPUL':
+      case 'TAKEMEHOME': {
+        // Landmark warp. GTA has always had one, and on a map that is now most of a
+        // kilometre end to end it is the difference between testing the bridge and
+        // walking to it. The car, if you are in one, comes with you.
+        const to = entry.codes[0] === 'TAKEMEHOME'
+          ? this.city.playerStart
+          : this.landmark(this.city.pois.length ? 'plaza' : 'home');
+        this.warp(to.x, to.z);
+        label = entry.codes[0] === 'TAKEMEHOME' ? 'BACK AT HOME' : `AT ${this.map.bridge}`;
+        break;
+      }
+    }
+    this.triggerCheat(label);
+    return true;
+  }
+
+  private triggerCheat(name: string): void {
+    this.cheatMsgT = 3.8;
+    this.audio.cheat();
+    setHud({
+      cheatMessage: name,
+      health: this.health,
+      armour: this.armour,
+      money: this.money,
+      wanted: this.wanted,
+      mag: this.mag[this.weapon],
+      reserve: this.reserve[this.weapon],
+    });
+  }
+
+  private spawnCheatVehicle(kind: VehKind): void {
+    const yaw = this.rig.yaw;
+    const fx = Math.sin(yaw), fz = Math.cos(yaw);
+    const spawnX = this.px + fx * 5.5;
+    const spawnZ = this.pz + fz * 5.5;
+    const gy = this.phys.groundHeight(spawnX, spawnZ, 1.2, this.py + 0.8);
+    const v = createVehicle(kind, 0xb8342a);
+    placeVehicle(v, spawnX, spawnZ, yaw);
+    v.y = gy;
+    this.traffic.cars.push(v);
+    this.scene.add(v.group);
+  }
+
+  /* ── water ────────────────────────────────────────────── */
+
+  /**
+   * The canal is a real hole in the world, so it needs a real consequence.
+   *
+   * Both banks are walled and railed, so getting in takes a ramp or a lot of commitment;
+   * once you are in, the engine drowns — you are ejected from the car, and you have a few
+   * seconds to be somewhere else before the hospital claims you. Dry beds (the desert
+   * wadi) are just terrain, so they never appear in waterZones at all.
+   */
+  private updateDrowning(dt: number): void {
+    const zones = this.city.waterZones;
+    if (!zones.length || this.dead) {
+      // Clear the HUD as well as the timer, or the warning bar stays up over WASTED.
+      if (this.drownT > 0) { this.drownT = 0; setHud({ drowning: 0 }); }
+      return;
+    }
+    const y = this.vehicle ? this.vehicle.y : this.py;
+    let depth = 0;
+    for (const w of zones) {
+      if (this.px < w.minX || this.px > w.maxX || this.pz < w.minZ || this.pz > w.maxZ) continue;
+      depth = Math.max(depth, w.surface - (y + 0.9));
+    }
+    if (depth <= 0) {
+      if (this.drownT > 0) setHud({ drowning: 0 });
+      this.drownT = 0;
+      return;
+    }
+
+    this.drownT += dt;
+    if (this.vehicle) {
+      // A flooded engine does not run. Stall it, then bail the driver out.
+      const v = this.vehicle;
+      v.ctrl.throttle = 0;
+      v.ctrl.brake = 0;
+      v.speed *= Math.max(0, 1 - dt * 2.5);
+      if (this.drownT > 1.1) {
+        this.toast('The engine has flooded — get out!');
+        this.exitVehicle();
+      }
+    }
+    if (this.waterproof) return;
+    setHud({ drowning: clamp(this.drownT / DROWN_SECONDS, 0, 1) });
+    if (this.drownT > DROWN_SECONDS * 0.35) {
+      this.damagePlayer(38 * dt, this.px, this.pz, false);
+    }
   }
 
   /* ── vehicles vs people ───────────────────────────────────────────────── */

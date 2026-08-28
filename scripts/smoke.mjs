@@ -13,7 +13,7 @@ import { join } from 'node:path';
 
 const OUT = '.smoke-build';
 const MODULES = [
-  'mathx', 'settings', 'physics', 'assets', 'materials', 'sky', 'city', 'humanoid', 'characters',
+  'mathx', 'settings', 'physics', 'assets', 'materials', 'sky', 'theme', 'maps', 'city', 'humanoid', 'characters',
   'weapons', 'vehicle', 'peds', 'traffic', 'combat', 'minimap', 'hudstore',
   'camerarig', 'audio', 'input', 'water', 'ao', 'layout', 'scheme', 'protocol', 'netclient',
 ];

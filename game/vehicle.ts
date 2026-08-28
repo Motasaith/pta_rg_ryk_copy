@@ -72,6 +72,7 @@ export interface Vehicle {
   wheelMeshes: { mesh: THREE.Object3D; front: boolean }[];
   bodyPivot: THREE.Group;
   brakeLight: THREE.Mesh | null;
+  headLight: THREE.Mesh | null;
   lightbar: { l: THREE.Mesh; r: THREE.Mesh } | null;
   x: number;
   y: number;
@@ -94,6 +95,7 @@ export interface Vehicle {
   driver: Humanoid | null;
   isPlayer: boolean;
   siren: boolean;
+  alarmT: number;
   box: Box;
   /** traffic AI state (null once a human takes the wheel) */
   ai: null | { from: number; to: number; t: number; wait: number; chase: boolean };
@@ -371,7 +373,7 @@ export function createVehicle(kind: VehKind, colour: number): Vehicle {
     wheelMeshes.push({ mesh: w, front });
   }
 
-  const v = finishVehicle(kind, colour, group, wheelMeshes, bodyPivot, brakeMesh, lightbar);
+  const v = finishVehicle(kind, colour, group, wheelMeshes, bodyPivot, brakeMesh, headMesh, lightbar);
   return v;
 }
 
@@ -530,12 +532,14 @@ function createModelVehicle(proto: THREE.Object3D, kind: VehKind, colour: number
 
   const wheelMeshes: Vehicle['wheelMeshes'] = wheels.map((w) => ({ mesh: w, front: w.name.includes('_F') }));
   let brakeLight: THREE.Mesh | null = null;
+  let headLight: THREE.Mesh | null = null;
   let barL: THREE.Mesh | null = null;
   let barR: THREE.Mesh | null = null;
   root.traverse((o) => {
     const m = o as THREE.Mesh;
     if (!m.isMesh) return;
     if (m.userData.lights === 'tail' && !brakeLight) brakeLight = m;
+    if (m.userData.lights === 'head' && !headLight) headLight = m;
     if (m.userData.lights === 'barL' && !barL) barL = m;
     if (m.userData.lights === 'barR' && !barR) barR = m;
     if (m.userData.tintable) {
@@ -544,7 +548,7 @@ function createModelVehicle(proto: THREE.Object3D, kind: VehKind, colour: number
     }
   });
 
-  return finishVehicle(kind, colour, group, wheelMeshes, bodyPivot, brakeLight,
+  return finishVehicle(kind, colour, group, wheelMeshes, bodyPivot, brakeLight, headLight,
     barL && barR ? { l: barL, r: barR } : null);
 }
 
@@ -552,16 +556,16 @@ function createModelVehicle(proto: THREE.Object3D, kind: VehKind, colour: number
 function finishVehicle(
   kind: VehKind, colour: number, group: THREE.Group,
   wheelMeshes: Vehicle['wheelMeshes'], bodyPivot: THREE.Group,
-  brakeLight: THREE.Mesh | null, lightbar: Vehicle['lightbar'],
+  brakeLight: THREE.Mesh | null, headLight: THREE.Mesh | null, lightbar: Vehicle['lightbar'],
 ): Vehicle {
   const v: Vehicle = {
     kind, colour, spec: SPECS[kind], group, wheelMeshes, bodyPivot,
-    brakeLight, lightbar,
+    brakeLight, headLight, lightbar,
     x: 0, y: 0, z: 0, yaw: 0, vx: 0, vz: 0, speed: 0, steerAngle: 0, wheelSpin: 0,
     health: 100,
     boost: 1, boosting: false, boostLock: false,
     ctrl: { throttle: 0, brake: 0, steer: 0, handbrake: false, boost: false },
-    driver: null, isPlayer: false, siren: false,
+    driver: null, isPlayer: false, siren: false, alarmT: 0,
     box: { minX: 0, maxX: 0, minZ: 0, maxZ: 0, bottom: 0, top: SPECS[kind].height, kind: KIND.Vehicle },
     ai: null, hornT: 0, crashT: 0, bodyRoll: 0, bodyPitch: 0, netId: 0,
   };
@@ -786,6 +790,23 @@ export function updateSiren(v: Vehicle, t: number): void {
   const a = on ? (Math.sin(t * 12) > 0 ? 1 : 0) : 0;
   (v.lightbar.l.material as THREE.MeshStandardMaterial).emissiveIntensity = a * 3;
   (v.lightbar.r.material as THREE.MeshStandardMaterial).emissiveIntensity = (on ? 1 - a : 0) * 3;
+}
+
+/** Flash headlights and taillights while car alarm is triggered. */
+export function updateAlarm(v: Vehicle, dt: number, t: number): void {
+  if (v.alarmT <= 0) return;
+  v.alarmT = Math.max(0, v.alarmT - dt);
+  const flash = Math.sin(t * 16) > 0;
+  if (v.brakeLight) {
+    (v.brakeLight.material as THREE.MeshStandardMaterial).emissiveIntensity = flash ? 3.5 : 0;
+  }
+  if (v.headLight) {
+    (v.headLight.material as THREE.MeshStandardMaterial).emissiveIntensity = flash ? 3.5 : 0;
+  }
+  if (v.lightbar) {
+    (v.lightbar.l.material as THREE.MeshStandardMaterial).emissiveIntensity = flash ? 3.5 : 0;
+    (v.lightbar.r.material as THREE.MeshStandardMaterial).emissiveIntensity = flash ? 0 : 3.5;
+  }
 }
 
 /** Driver seat in world space. seat[0] is negative → right-hand drive, as in Pakistan. */

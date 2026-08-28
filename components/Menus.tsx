@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { GameMap } from '@/game/maps';
 import { ACTION_LABEL, ACTIONS, Action, DEFAULT_BINDS, keyLabel, QUALITY, Quality, Settings } from '@/game/settings';
 
 /* ── loading + title ──────────────────────────────────────────────────────── */
@@ -24,23 +25,54 @@ export function Loader({ pct, msg }: { pct: number; msg: string }) {
   );
 }
 
-export function Title({ onStart, onOnline, onSettings }: {
+export function Title({ maps, mapId, onPickMap, onStart, onOnline, onSettings }: {
+  maps: GameMap[];
+  mapId: string;
+  onPickMap: (id: string) => void;
   onStart: () => void;
   onOnline: () => void;
   onSettings: () => void;
 }) {
+  const chosen = maps.find((m) => m.id === mapId) ?? maps[0];
   return (
     <div className="screen title">
       <div className="titlecard">
-        <div className="eyebrow">OPEN WORLD · RAHIM YAR KHAN</div>
+        <div className="eyebrow">OPEN WORLD &middot; {chosen.region.toUpperCase()}</div>
         <h1>
           LOST &amp;<br /><span>FOUND</span>
         </h1>
         <p>
           Mom&apos;s list has eight things on it and they are scattered across the whole city.
-          Walk, sprint, jump, drive anything with wheels, shop, fight, shoot — and try not to
+          Walk, sprint, jump, drive anything with wheels, shop, fight, shoot &mdash; and try not to
           collect five stars while you are at it.
         </p>
+
+        <div className="maplabel">SELECT A MAP</div>
+        <div className="mappicker">
+          {maps.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              className={`mapcard${m.id === mapId ? ' on' : ''}`}
+              onClick={() => onPickMap(m.id)}
+              aria-pressed={m.id === mapId}
+            >
+              <i
+                className="mapswatch"
+                style={{ background: `linear-gradient(140deg, ${m.swatch[0]}, ${m.swatch[1]})` }}
+              />
+              <b>{m.name}</b>
+              <em>{m.region}</em>
+              <span>{m.blurb}</span>
+              <u>{m.bridge} over {m.water.toLowerCase()}</u>
+            </button>
+          ))}
+        </div>
+        <div className="mapnote">
+          Only the map you pick is generated, so nothing you are not playing costs any memory.
+          Changing map later means restarting.
+        </div>
+
         <div className="keys">
           <span><b>WASD</b> move</span>
           <span><b>SHIFT</b> sprint</span>
@@ -49,13 +81,14 @@ export function Title({ onStart, onOnline, onSettings }: {
           <span><b>MOUSE</b> look</span>
           <span><b>RMB</b> aim</span>
           <span><b>1–9, 0</b> full arsenal (fists, knife, katana, pistol, smg, ak47, shotgun, sniper, rpg, minigun) / scroll wheel</span>
-          <span><b>E</b> enter car · open gun shop</span>
+          <span><b>E</b> enter car &middot; open gun shop</span>
           <span><b>R</b> reload</span>
           <span><b>TAB</b> map</span>
+          <span><b>`</b> cheat console</span>
           <span><b>ESC</b> pause</span>
         </div>
         <div className="row">
-          <button className="btn primary" onClick={onStart}>PLAY SOLO</button>
+          <button className="btn primary" onClick={onStart}>PLAY {chosen.name.toUpperCase()}</button>
           <button className="btn online" onClick={onOnline}>PLAY ONLINE</button>
           <button className="btn" onClick={onSettings}>SETTINGS</button>
         </div>
@@ -63,7 +96,10 @@ export function Title({ onStart, onOnline, onSettings }: {
           Online: host a room, share the 5-letter code, and up to 8 of you roam the city
           together. No account needed and nothing is stored.
         </div>
-        <div className="fineprint">Click the game to capture the mouse. Press ESC to release it.</div>
+        <div className="fineprint">
+          Click the game to capture the mouse. Press ESC to release it, and the backtick key
+          (<b>`</b>, above TAB) for cheats — they go in a prompt, so typing one never fires a gun.
+        </div>
       </div>
     </div>
   );
@@ -113,7 +149,7 @@ const TEAM_LABEL = ['NEUTRAL', 'GREEN', 'ORANGE'];
 
 export function PauseMenu({
   settings, onChange, onResume, onRestart, capture, net, initialTab = 'display',
-  resumeLabel = 'RESUME',
+  resumeLabel = 'RESUME', mapName = '',
 }: {
   settings: Settings;
   onChange: (s: Settings) => void;
@@ -123,6 +159,7 @@ export function PauseMenu({
   net: NetUi;
   initialTab?: Tab;
   resumeLabel?: string;
+  mapName?: string;
 }) {
   const [tab, setTab] = useState<Tab>(initialTab);
   const [listening, setListening] = useState<string | null>(null);
@@ -145,7 +182,7 @@ export function PauseMenu({
     <div className="screen pause">
       <div className="panel">
         <div className="panelhead">
-          <h2>PAUSED</h2>
+          <h2>PAUSED{mapName ? <small>{mapName}</small> : null}</h2>
           <div className="tabs">
             {(['display', 'controls', 'audio', 'game', 'online'] as Tab[]).map((t) => (
               <button key={t} className={t === tab ? 'tab on' : 'tab'} onClick={() => setTab(t)}>

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Game } from '@/game/engine';
 import { getHud, resetHud, subscribeHud } from '@/game/hudstore';
+import { DEFAULT_MAP_ID, MAPS } from '@/game/maps';
 import { loadSettings, saveSettings, Settings } from '@/game/settings';
 import { Hud } from './Hud';
 import { Loader, MapOverlay, PauseMenu, Title, Wasted, Won } from './Menus';
@@ -16,6 +17,7 @@ export default function GameShell() {
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
   const [showSettings, setShowSettings] = useState(false);
   const [menuTab, setMenuTab] = useState<'display' | 'online'>('display');
+  const [mapId, setMapId] = useState(DEFAULT_MAP_ID);
   const [error, setError] = useState<string | null>(null);
   const hud = useSyncExternalStore(subscribeHud, getHud, getHud);
 
@@ -63,8 +65,8 @@ export default function GameShell() {
   }, []);
 
   const start = useCallback(() => {
-    gameRef.current?.start();
-  }, []);
+    void gameRef.current?.start(mapId);
+  }, [mapId]);
 
   const resume = useCallback(() => {
     setShowSettings(false);
@@ -76,16 +78,24 @@ export default function GameShell() {
   }, []);
 
   // Escape resumes from the pause screen; the engine pauses when pointer lock drops.
+  // Backtick opens the cheat prompt — handled here, at the document, because the game's
+  // own input layer is switched off for the whole time the prompt has the keyboard.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.code === 'Backquote' && hud.phase === 'playing' && !hud.shopOpen && !hud.mapOpen) {
+        e.preventDefault();
+        gameRef.current?.toggleConsole();
+        return;
+      }
       if (e.code !== 'Escape') return;
+      if (hud.cheatConsoleOpen) { gameRef.current?.toggleConsole(false); return; }
       if (hud.shopOpen) gameRef.current?.closeShop();
       if (hud.phase === 'paused' && !showSettings) resume();
       if (hud.mapOpen) gameRef.current?.toggleMap(false);
     };
     addEventListener('keydown', onKey);
     return () => removeEventListener('keydown', onKey);
-  }, [hud.phase, hud.mapOpen, hud.shopOpen, showSettings, resume]);
+  }, [hud.phase, hud.mapOpen, hud.shopOpen, hud.cheatConsoleOpen, showSettings, resume]);
 
   return (
     <div className="stage">
@@ -94,10 +104,19 @@ export default function GameShell() {
         className="viewport"
         onClick={() => {
           // clicking the world re-captures the mouse after Esc released it
-          if (hud.phase === 'playing' && !hud.shopOpen) gameRef.current?.getInput().requestLock();
+          if (hud.phase === 'playing' && !hud.shopOpen && !hud.cheatConsoleOpen) {
+            gameRef.current?.getInput().requestLock();
+          }
         }}
       />
-      <Hud hud={hud} radarRef={radarRef} showPerf={settings.showFps} />
+      <Hud
+        hud={hud}
+        radarRef={radarRef}
+        showPerf={settings.showFps}
+        cheatHints={Game.cheatHints()}
+        onCheat={(code) => gameRef.current?.submitCheat(code)}
+        onCloseCheat={() => gameRef.current?.toggleConsole(false)}
+      />
 
       {hud.mapOpen && <MapOverlay mapRef={mapRef} onClose={() => gameRef.current?.toggleMap(false)} />}
 
@@ -121,6 +140,9 @@ export default function GameShell() {
 
       {hud.phase === 'title' && !showSettings && (
         <Title
+          maps={MAPS}
+          mapId={mapId}
+          onPickMap={setMapId}
           onStart={start}
           onOnline={() => { setMenuTab('online'); setShowSettings(true); }}
           onSettings={() => { setMenuTab('display'); setShowSettings(true); }}
@@ -143,6 +165,7 @@ export default function GameShell() {
           }
           onRestart={restart}
           initialTab={menuTab}
+          mapName={hud.mapName}
           capture={(cb) => gameRef.current?.getInput().beginCapture(cb)}
           net={{
             status: hud.netStatus,

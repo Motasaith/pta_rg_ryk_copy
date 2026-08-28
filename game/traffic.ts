@@ -4,7 +4,7 @@ import { clamp, dist2, mulberry32, pick, Rng, wrapPi } from './mathx';
 import { CarState, MAX_SYNC_CARS, TF_BRAKE, TF_PARKED, TF_SIREN, VEH_KINDS } from './protocol';
 import { Physics } from './physics';
 import {
-  createVehicle, placeVehicle, poseNetVehicle, stepVehicle, updateSiren, updateVehicleBox, CAR_COLOURS, Vehicle, VehKind,
+  createVehicle, placeVehicle, poseNetVehicle, stepVehicle, updateAlarm, updateSiren, updateVehicleBox, CAR_COLOURS, Vehicle, VehKind,
 } from './vehicle';
 
 interface Lane {
@@ -293,6 +293,7 @@ export class Traffic {
   ): void {
     for (const v of this.cars) {
       updateSiren(v, t);
+      updateAlarm(v, dt, t);
       if (v.isPlayer) continue;
       // A puppet's ambient cars are posed by applyNetwork; stepping them as well would
       // have physics and the network pulling the same car two ways every frame.
