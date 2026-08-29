@@ -7,19 +7,21 @@ import { ACTION_LABEL, ACTIONS, Action, DEFAULT_BINDS, keyLabel, QUALITY, Qualit
 /* ── loading + title ──────────────────────────────────────────────────────── */
 
 export function Loader({ pct, msg }: { pct: number; msg: string }) {
+  const progress = Math.max(0, Math.min(100, Math.round(pct)));
   return (
     <div className="screen loader">
-      <div className="loadbox">
-        <div className="spinner" />
-        <h1 className="brand">
-          RAHIM GARDEN CITY
-          <small>lost &amp; found · r.y. khan</small>
-        </h1>
-        <div className="loadmsg">{msg}</div>
-        <div className="bar"><div className="fill" style={{ width: `${pct}%` }} /></div>
-        <div className="loadnote">
-          the whole city is generated in your browser — no downloads, no textures to fetch
+      <div className="load-art" aria-hidden="true">
+        <i className="load-sun" /><i className="load-road" /><i className="load-car" />
+      </div>
+      <div className="loadbox" role="status" aria-live="polite">
+        <div className="load-kicker"><span /> PAKISTAN, AFTER DARK</div>
+        <h1 className="load-title">PT<span>A</span></h1>
+        <div className="load-status">
+          <div><b>BUILDING YOUR CITY</b><strong>{progress}<small>%</small></strong></div>
+          <div className="bar"><div className="fill" style={{ width: `${progress}%` }} /></div>
+          <div className="loadmsg">{msg || 'Preparing the streets…'}</div>
         </div>
+        <div className="loadnote">The world is generated locally in your browser. First launch may take a moment.</div>
       </div>
     </div>
   );
@@ -35,21 +37,26 @@ export function Title({ maps, mapId, onPickMap, onStart, onOnline, onSettings }:
 }) {
   const chosen = maps.find((m) => m.id === mapId) ?? maps[0];
   return (
-    <div className="screen title">
-      <div className="titlecard">
-        <div className="eyebrow">OPEN WORLD &middot; {chosen.region.toUpperCase()}</div>
-        <h1>
-          LOST &amp;<br /><span>FOUND</span>
-        </h1>
-        <p>
-          Mom&apos;s list has eight things on it and they are scattered across the whole city.
-          Walk, sprint, jump, drive anything with wheels, shop, fight, shoot &mdash; and try not to
-          collect five stars while you are at it.
-        </p>
-
-        <div className="maplabel">SELECT A MAP</div>
+    <div className="screen title" style={{ '--map-a': chosen.swatch[0], '--map-b': chosen.swatch[1] } as React.CSSProperties}>
+      <div className="title-noise" aria-hidden="true" />
+      <header className="title-topbar">
+        <div className="wordmark">PT<span>A</span> <small>OPEN WORLD</small></div>
+        <button className="iconbtn" onClick={onSettings}>SETTINGS <b>⚙</b></button>
+      </header>
+      <main className="titlecard">
+        <section className="title-hero">
+          <div className="eyebrow"><i /> {chosen.region.toUpperCase()} <span>•</span> FREE ROAM</div>
+          <h1>PT<span>A</span></h1>
+          <p>Eight things. One sprawling city. Drive anything, explore everywhere, and keep the cops off your back.</p>
+          <div className="hero-actions">
+            <button className="btn primary playbtn" onClick={onStart}><i>▶</i><span>PLAY NOW<small>{chosen.name}</small></span></button>
+            <button className="btn online" onClick={onOnline}><i>◎</i><span>ONLINE<small>Up to 8 players</small></span></button>
+          </div>
+        </section>
+        <section className="map-section">
+        <div className="maplabel"><span>CHOOSE YOUR THEME</span><small>{maps.length} THEMES</small></div>
         <div className="mappicker">
-          {maps.map((m) => (
+          {maps.map((m, index) => (
             <button
               key={m.id}
               type="button"
@@ -57,50 +64,16 @@ export function Title({ maps, mapId, onPickMap, onStart, onOnline, onSettings }:
               onClick={() => onPickMap(m.id)}
               aria-pressed={m.id === mapId}
             >
-              <i
-                className="mapswatch"
-                style={{ background: `linear-gradient(140deg, ${m.swatch[0]}, ${m.swatch[1]})` }}
-              />
-              <b>{m.name}</b>
-              <em>{m.region}</em>
-              <span>{m.blurb}</span>
-              <u>{m.bridge} over {m.water.toLowerCase()}</u>
+              <i className="mapswatch" style={{ background: `linear-gradient(145deg, ${m.swatch[0]}, ${m.swatch[1]})` }}><span>{String(index + 1).padStart(2, '0')}</span></i>
+              <span className="mapcopy"><b>{m.name}</b><em>{m.region}</em></span>
+              <u>{m.id === mapId ? 'SELECTED' : 'EXPLORE'}</u>
             </button>
           ))}
         </div>
-        <div className="mapnote">
-          Only the map you pick is generated, so nothing you are not playing costs any memory.
-          Changing map later means restarting.
-        </div>
-
-        <div className="keys">
-          <span><b>WASD</b> move</span>
-          <span><b>SHIFT</b> sprint</span>
-          <span><b>SPACE</b> jump / handbrake</span>
-          <span><b>C</b> crouch / sit</span>
-          <span><b>MOUSE</b> look</span>
-          <span><b>RMB</b> aim</span>
-          <span><b>1–9, 0</b> full arsenal (fists, knife, katana, pistol, smg, ak47, shotgun, sniper, rpg, minigun) / scroll wheel</span>
-          <span><b>E</b> enter car &middot; open gun shop</span>
-          <span><b>R</b> reload</span>
-          <span><b>TAB</b> map</span>
-          <span><b>`</b> cheat console</span>
-          <span><b>ESC</b> pause</span>
-        </div>
-        <div className="row">
-          <button className="btn primary" onClick={onStart}>PLAY {chosen.name.toUpperCase()}</button>
-          <button className="btn online" onClick={onOnline}>PLAY ONLINE</button>
-          <button className="btn" onClick={onSettings}>SETTINGS</button>
-        </div>
-        <div className="onlinehint">
-          Online: host a room, share the 5-letter code, and up to 8 of you roam the city
-          together. No account needed and nothing is stored.
-        </div>
-        <div className="fineprint">
-          Click the game to capture the mouse. Press ESC to release it, and the backtick key
-          (<b>`</b>, above TAB) for cheats — they go in a prompt, so typing one never fires a gun.
-        </div>
-      </div>
+        </section>
+        <div className="quick-keys"><span><kbd>WASD</kbd> MOVE</span><span><kbd>SHIFT</kbd> SPRINT</span><span><kbd>SPACE</kbd> JUMP</span><span><kbd>E</kbd> INTERACT</span><span><kbd>TAB</kbd> MAP</span><span><kbd>ESC</kbd> PAUSE</span></div>
+      </main>
+      <footer className="title-footer"><span>v2.0</span><span>R.Y. KHAN • PAKISTAN</span><span>BEST WITH HEADPHONES</span></footer>
     </div>
   );
 }

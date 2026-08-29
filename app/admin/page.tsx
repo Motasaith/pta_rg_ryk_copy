@@ -79,7 +79,7 @@ export default function AdminPage() {
     return (
       <main className="admin">
         <div className="adminbox">
-          <h1>RAHIM GARDEN CITY</h1>
+          <h1>PTA</h1>
           <p className="sub">admin dashboard</p>
           <form
             onSubmit={(e) => {
@@ -113,7 +113,7 @@ export default function AdminPage() {
     <main className="admin">
       <header className="adminhead">
         <div>
-          <h1>RAHIM GARDEN CITY</h1>
+          <h1>PTA</h1>
           <p className="sub">live rooms · refreshes every {POLL_MS / 1000}s</p>
         </div>
         <button
