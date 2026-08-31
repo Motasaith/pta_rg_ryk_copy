@@ -1,5 +1,9 @@
 import { Action, Binds } from './settings';
 
+function clampUnit(v: number): number {
+  return v < -1 ? -1 : v > 1 ? 1 : v;
+}
+
 /**
  * Keyboard + mouse input.
  *
@@ -13,6 +17,21 @@ export class Input {
   private down = new Set<string>();
   private edge = new Set<string>();
   private capture: ((code: string) => void) | null = null;
+
+  /* ── touch layer ──────────────────────────────────────────────────────────
+     On a phone there is no keyboard and no pointer lock, so the on-screen pad
+     writes into a parallel set of "virtual" presses and an analog stick. Every
+     query below unions the two, which means the whole engine — walking,
+     driving, shooting, the lot — is completely unaware it is being played with
+     thumbs. */
+
+  /** True once any touch has been seen: the UI switches to the on-screen pad. */
+  touch = false;
+  /** Analog stick, each −1..1. Zero when nothing is held. */
+  stickX = 0;
+  stickY = 0;
+  private vDown = new Set<Action>();
+  private vEdge = new Set<Action>();
 
   mouseDX = 0;
   mouseDY = 0;
@@ -147,8 +166,51 @@ export class Input {
     this.capture = null;
   }
 
+  /** Hold or release an on-screen button. */
+  setVirtual(a: Action, down: boolean): void {
+    if (down) {
+      if (!this.vDown.has(a)) this.vEdge.add(a);
+      this.vDown.add(a);
+    } else {
+      this.vDown.delete(a);
+    }
+  }
+
+  /** Fire a single on-screen press, for buttons that are taps rather than holds. */
+  tapVirtual(a: Action): void {
+    this.vEdge.add(a);
+  }
+
+  /** Look, from a drag. Bypasses the pointer lock, which touch never has. */
+  look(dx: number, dy: number): void {
+    if (!this.enabled) return;
+    this.mouseDX += dx;
+    this.mouseDY += dy;
+  }
+
+  /** Fire / aim, from the on-screen triggers. */
+  setButton(i: 0 | 1 | 2, down: boolean): void {
+    if (down && !this.buttons[i]) this.buttonEdge[i] = true;
+    this.buttons[i] = down;
+  }
+
+  /** Called by the pad when the first touch arrives, so the UI can switch modes. */
+  markTouch(): void {
+    this.touch = true;
+  }
+
+  /** Let go of everything the pad was holding — on pause, or when it unmounts. */
+  clearVirtual(): void {
+    this.vDown.clear();
+    this.vEdge.clear();
+    this.stickX = 0;
+    this.stickY = 0;
+    this.buttons = [false, false, false];
+  }
+
   isDown(a: Action): boolean {
     if (!this.enabled) return false;
+    if (this.vDown.has(a)) return true;
     const codes = this.binds[a];
     for (let i = 0; i < codes.length; i++) if (this.down.has(codes[i])) return true;
     return false;
@@ -156,6 +218,7 @@ export class Input {
 
   justPressed(a: Action): boolean {
     if (!this.enabled) return false;
+    if (this.vEdge.has(a)) return true;
     const codes = this.binds[a];
     for (let i = 0; i < codes.length; i++) if (this.edge.has(codes[i])) return true;
     return false;
@@ -169,16 +232,27 @@ export class Input {
    * vehicle and the interaction pass immediately puts you back in it.
    */
   consume(a: Action): void {
+    this.vEdge.delete(a);
     for (const code of this.binds[a]) this.edge.delete(code);
   }
 
+  /**
+   * Keys give −1, 0 or 1. The stick gives everything in between, and wins when it is
+   * being held — which is what lets a thumb feather the steering instead of slamming it
+   * lock to lock, without a single line of the driving code knowing about touch.
+   */
   axis(neg: Action, pos: Action): number {
-    return (this.isDown(pos) ? 1 : 0) - (this.isDown(neg) ? 1 : 0);
+    const keys = (this.isDown(pos) ? 1 : 0) - (this.isDown(neg) ? 1 : 0);
+    if (!this.enabled) return 0;
+    const analog = pos === 'right' ? this.stickX : pos === 'forward' ? this.stickY : 0;
+    if (analog !== 0) return clampUnit(analog + keys);
+    return keys;
   }
 
   /** Call once at the very end of a frame. */
   endFrame(): void {
     this.edge.clear();
+    this.vEdge.clear();
     this.mouseDX = 0;
     this.mouseDY = 0;
     this.wheel = 0;

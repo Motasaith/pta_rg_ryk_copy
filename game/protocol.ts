@@ -12,7 +12,15 @@
  * null rather than throwing, because these bytes arrive from the network.
  */
 
-export const PROTOCOL_VERSION = 2;
+/**
+ * Bumped to 3 when maps became selectable.
+ *
+ * A version 2 client has exactly one world and no idea another exists, so it would join
+ * a room happily and then play a completely different city from everyone else — which is
+ * indistinguishable from "the other player got a broken game". Rejecting it outright and
+ * telling them to reload is the only honest outcome.
+ */
+export const PROTOCOL_VERSION = 3;
 
 /** Free-roam room cap. Bandwidth is linear in this, so it is deliberately modest. */
 export const MAX_PLAYERS = 8;
@@ -254,25 +262,28 @@ function fill(s: PartialState): PlayerState {
 
 /* ── client → server ──────────────────────────────────────────────────────── */
 
-export function encodeHello(name: string): ArrayBuffer {
+/** `map` is an index into the map roster; the first client to arrive sets the room's. */
+export function encodeHello(name: string, map: number): ArrayBuffer {
   const bytes = enc.encode(name.slice(0, 24));
-  const buf = new ArrayBuffer(3 + bytes.length);
+  const buf = new ArrayBuffer(4 + bytes.length);
   const dv = new DataView(buf);
   dv.setUint8(0, C_HELLO);
   dv.setUint8(1, PROTOCOL_VERSION);
-  dv.setUint8(2, bytes.length);
-  new Uint8Array(buf, 3).set(bytes);
+  dv.setUint8(2, map & 0xff);
+  dv.setUint8(3, bytes.length);
+  new Uint8Array(buf, 4).set(bytes);
   return buf;
 }
 
-export function decodeHello(buf: ArrayBuffer): { version: number; name: string } | null {
-  if (buf.byteLength < 3) return null;
+export function decodeHello(buf: ArrayBuffer): { version: number; map: number; name: string } | null {
+  if (buf.byteLength < 4) return null;
   const dv = new DataView(buf);
   if (dv.getUint8(0) !== C_HELLO) return null;
   const version = dv.getUint8(1);
-  const len = dv.getUint8(2);
-  if (buf.byteLength < 3 + len) return null;
-  return { version, name: dec.decode(new Uint8Array(buf, 3, len)) };
+  const map = dv.getUint8(2);
+  const len = dv.getUint8(3);
+  if (buf.byteLength < 4 + len) return null;
+  return { version, map, name: dec.decode(new Uint8Array(buf, 4, len)) };
 }
 
 /** `seq` lets the server drop out-of-order frames without a full ack scheme. */
@@ -302,12 +313,16 @@ export interface Welcome {
   yourTeam: number;
   /** id of the client the server has made traffic host; 0 while nobody holds it */
   hostId: number;
+  /** the map this room is playing, as an index into the roster. Not negotiable. */
+  map: number;
   peers: Peer[];
 }
 
-export function encodeWelcome(yourId: number, yourTeam: number, hostId: number, peers: Peer[]): ArrayBuffer {
+export function encodeWelcome(
+  yourId: number, yourTeam: number, hostId: number, map: number, peers: Peer[],
+): ArrayBuffer {
   const names = peers.map((p) => enc.encode(p.name.slice(0, 24)));
-  let size = 6;
+  let size = 7;
   for (const n of names) size += 3 + n.length;
   const buf = new ArrayBuffer(size);
   const dv = new DataView(buf);
@@ -317,8 +332,9 @@ export function encodeWelcome(yourId: number, yourTeam: number, hostId: number, 
   dv.setUint8(2, yourId);
   dv.setUint8(3, yourTeam & 0x03);
   dv.setUint8(4, hostId & 0xff);
-  dv.setUint8(5, peers.length);
-  let o = 6;
+  dv.setUint8(5, map & 0xff);
+  dv.setUint8(6, peers.length);
+  let o = 7;
   for (let i = 0; i < peers.length; i++) {
     dv.setUint8(o++, peers[i].id);
     dv.setUint8(o++, peers[i].team & 0x03);
@@ -330,16 +346,17 @@ export function encodeWelcome(yourId: number, yourTeam: number, hostId: number, 
 }
 
 export function decodeWelcome(buf: ArrayBuffer): Welcome | null {
-  if (buf.byteLength < 6) return null;
+  if (buf.byteLength < 7) return null;
   const dv = new DataView(buf);
   if (dv.getUint8(0) !== S_WELCOME) return null;
   const version = dv.getUint8(1);
   const yourId = dv.getUint8(2);
   const yourTeam = dv.getUint8(3) & 0x03;
   const hostId = dv.getUint8(4);
-  const count = dv.getUint8(5);
+  const map = dv.getUint8(5);
+  const count = dv.getUint8(6);
   const peers: Peer[] = [];
-  let o = 6;
+  let o = 7;
   for (let i = 0; i < count; i++) {
     if (o + 3 > buf.byteLength) return null;
     const id = dv.getUint8(o++);
@@ -349,7 +366,7 @@ export function decodeWelcome(buf: ArrayBuffer): Welcome | null {
     peers.push({ id, team, name: dec.decode(new Uint8Array(buf, o, len)) });
     o += len;
   }
-  return { version, yourId, yourTeam, hostId, peers };
+  return { version, yourId, yourTeam, hostId, map, peers };
 }
 
 export function encodeSnapshot(tick: number, states: PartialState[]): ArrayBuffer {

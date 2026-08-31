@@ -65,7 +65,12 @@ export interface Theme {
   outerMix: BlockType[];
   /** the middle block */
   centre: BlockType;
-  /** landmark slots, [bi, bj, type] — applied after the random pass */
+  /**
+   * Landmark slots, [bi, bj, type] — applied after the random pass.
+   *
+   * Every theme pins a `parking` block, because that is where the Pay 'n' Spray goes and
+   * a map where you cannot lose the police by respraying is a map missing a mechanic.
+   */
   fixed: [number, number, BlockType][];
 
   /** storeys per tower block */
@@ -109,6 +114,7 @@ export const THEMES: Theme[] = [
     fixed: [
       [1, 1, 'mosque'], [1, 3, 'market'], [3, 1, 'police'], [3, 3, 'tower'],
       [0, 2, 'park'], [4, 2, 'houses'], [2, 0, 'shops'], [2, 4, 'park'], [3, 4, 'houses'],
+      [4, 0, 'parking'],
     ],
     towerFloors: [4, 13],
     storeyChance: 0.45,
@@ -140,6 +146,7 @@ export const THEMES: Theme[] = [
     fixed: [
       [1, 1, 'mosque'], [1, 3, 'market'], [3, 1, 'police'], [3, 3, 'parking'],
       [0, 2, 'houses'], [2, 0, 'shops'], [2, 4, 'houses'], [3, 4, 'houses'],
+      [4, 0, 'parking'],
     ],
     towerFloors: [2, 5],
     storeyChance: 0.15,
@@ -171,6 +178,7 @@ export const THEMES: Theme[] = [
     fixed: [
       [1, 1, 'market'], [1, 3, 'park'], [3, 1, 'police'], [3, 3, 'park'],
       [0, 2, 'park'], [2, 0, 'shops'], [2, 4, 'houses'], [3, 4, 'houses'],
+      [4, 0, 'parking'],
     ],
     towerFloors: [2, 4],
     storeyChance: 0.6,
@@ -202,6 +210,7 @@ export const THEMES: Theme[] = [
     fixed: [
       [1, 1, 'tower'], [1, 3, 'market'], [3, 1, 'police'], [3, 3, 'tower'],
       [0, 2, 'park'], [2, 0, 'shops'], [2, 4, 'tower'], [3, 4, 'houses'],
+      [4, 0, 'parking'],
     ],
     towerFloors: [9, 26],
     storeyChance: 0.9,

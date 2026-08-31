@@ -85,6 +85,7 @@ Free plan throughout. Durable Objects have been on the Workers Free plan since A
 | `E`            | enter/exit vehicle, buy from a shop           |
 | `H`            | horn                                          |
 | `TAB` / `M`    | full map                                      |
+| `J`            | start / end a side job (in a taxi, cruiser or van) |
 | `` ` ``        | cheat console                                 |
 | `ESC`          | pause (also releases the mouse)               |
 
@@ -105,7 +106,70 @@ bind is dead and the mouse is free.
 twice as fast · `PANZER` spawn a cruiser · `GETTHEREFAST` spawn a hypercar ·
 `ROCKETMAN` launch yourself · `BIGBANG` detonate nearby traffic · `TIMEFLIES` skip
 six hours · `WALKONWATER` stop drowning · `TAKEMETOTHEPUL` warp to the big bridge ·
-`TAKEMEHOME` warp to your front door.
+`TAKEMEHOME` warp to your front door · `TAKEMETOSPRAY` warp to a respray bay ·
+`SCATTERSTORM` bring the monsoon · `ANDYELLOWSKY` bring a dust storm · `BLUESKIES`
+clear it up.
+
+> `J` rather than `2` for side jobs: you can shoot from a car, so the number row stays
+> the weapon wheel. It is rebindable in Pause → Controls like everything else.
+
+## Multiplayer and builds
+
+Two rules, both enforced on the wire:
+
+- **A room has one map, chosen by the first player through the door.** It goes out in the
+  Hello frame and comes back in every Welcome; a joiner adopts it whatever they picked on
+  the title screen, and the online panel shows which map the room is on. Join a room after
+  your own world is already built and the map disagrees, and you are disconnected with an
+  explanation rather than dropped into a different city with everyone else's cars driving
+  through your buildings.
+- **Everyone must be on the same build.** `PROTOCOL_VERSION` was bumped to 3 when maps
+  became selectable, so a client running the older single-map build is rejected on
+  connect with *"this build is out of date - reload the page"* instead of joining
+  successfully and quietly playing a different game.
+
+> The map index on the wire is the position in `THEMES`. **Append new maps; never reorder
+> them**, or two clients on different builds will agree on a number and disagree on a city.
+
+If two players say the game looks different on their two screens, the title screen now
+carries a build stamp: the asset tally (`14/15 textures - 8/8 models - HDRI ok`) and the
+wire version. Downloaded assets fall back to the procedural textures silently when a
+fetch fails or times out, so a machine on a slow connection can end up with a flatter
+looking city through no fault of the code - and that badge is how you tell.
+
+## Playing on a phone
+
+The game is **landscape-only on mobile**, and it says so out loud, because a browser
+page is not allowed to rotate a phone by itself:
+
+- `screen.orientation.lock()` throws unless the document is already **fullscreen**, and
+- **iOS Safari does not implement it at all.**
+
+So `game/device.ts` does the only honest thing. Tapping PLAY — a real user gesture,
+which both APIs require — requests fullscreen and *tries* to lock to landscape. On
+Android that works. On an iPhone it does not, and a **rotate-your-device gate** covers
+the screen until you turn the phone, pausing the game behind it so nobody is shot while
+reading a notice. Turning back resumes exactly where you were. Installed to a home
+screen, the web manifest's `"orientation": "landscape"` handles it properly.
+
+The on-screen pad (`components/TouchControls.tsx`) owns no game state. Every control
+writes into the same `Input` the keyboard writes into — a virtual key set plus an analog
+stick — so walking, driving, aiming and shooting run the identical code paths they do on
+a desktop. Two details worth knowing:
+
+- **The stick floats.** Its centre is wherever your thumb first lands in the bottom-left
+  zone, not a painted circle you have to find without being able to see your thumb.
+- **Sprint is automatic** past 85% deflection, so there is no sprint button competing for
+  the thumb that is already steering. In a car that same deflection does *not* fire the
+  nitrous — it has its own button.
+- Drags and button holds are tracked on `window`, not with `setPointerCapture`, which
+  throws `InvalidStateError` on touch often enough to jam a trigger down.
+
+The HUD rearranges itself around two thumbs: the radar moves to the top-left because the
+stick lives bottom-left, the weapon panel moves to the bottom-centre because the buttons
+live bottom-right, and safe-area insets keep everything clear of a notch. First run on a
+coarse-pointer device also defaults to the **Low** quality preset and a gentler look
+sensitivity; both are still yours to change in Pause → Display.
 
 ## What is in the game
 
@@ -122,6 +186,40 @@ six hours · `WALKONWATER` stop drowning · `TAKEMETOTHEPUL` warp to the big bri
   | **Karachi Metro** | Karachi | a shipping channel through downtown at night |
 
   Changing map means restarting, which is what the restart button already does.
+
+- **Weather** — clear, dust haze and heavy monsoon, crossfading over about fifteen
+  seconds and cycling on its own. Rain is one `LineSegments` of 2,400 streaks whose fall
+  happens entirely in the vertex shader, so the CPU writes one uniform a frame and never
+  touches a particle; dust is one `Points` of 900. Wet roads are not a shader or a
+  reflection pass — they are a roughness and albedo write on eight ground materials,
+  which is enough because the scene already has a real HDRI to reflect. The sun dims, the
+  dome goes overcast, the fog closes in, thunder rolls, and **tarmac loses a third of its
+  grip**, for the player and the traffic alike. Two draw calls, ~70 KB of vertex data.
+  Switch it off in Pause → Game.
+
+- **Five-star police escalation** — beat cops on foot, then cruisers, then **roadblocks**
+  (striped barriers, beacons and a spike strip that shreds your tyres and caps you at 42%
+  of top speed), then **SWAT enforcers** in black vans with AK-47s and 260 hp, then the
+  **search helicopter**: a real aircraft with spinning rotors, an orbiting searchlight
+  beam and a pool of light that follows you along the ground. The roadblocks and the
+  helicopter are pooled and built once at boot, and the blockade colliders ride the same
+  per-frame dynamic list as the traffic, so going from one star to five allocates nothing.
+  Break line of sight and **the stars flash** while the level ticks down.
+
+- **Pay 'n' Spray** — a three-walled bay on every car park. Drive in and the car comes out
+  repaired, resprayed a new colour and off the police computer. The trigger is a distance
+  test against a handful of bays; the whole feature is geometry plus about thirty lines.
+
+- **Street life** — pedestrians drop glowing cash bundles when they go down (police carry
+  more), shout at you when you shove them, and *get out of the car you just rammed* to
+  square up and swing. Nobody is spawned to do it: the angry driver is a pedestrian
+  borrowed from far enough away that nobody saw them leave, so the crowd size never grows.
+
+- **Side jobs** — press `J` in a rickshaw for **fares**, a cruiser for **vigilante** work
+  or a van as a **paramedic**. All three are the same two-beat loop — go to the pickup,
+  then the drop-off, before the clock runs out — with a tip for hurrying and a rising
+  multiplier for keeping the shift going. Nothing is spawned: a fare is a pedestrian who
+  already exists and a bust is a traffic car that is already driving around.
 
 - **The Grand Canal and the Big Pul** — every map is cut in two by a 56 m channel
   dug 3–4 m into the world (`Physics.addPit`, so the terrain has a real hole in it,
@@ -224,6 +322,11 @@ game/
   physics.ts        AABB world + spatial hash: ground query, cylinder resolve, raycast
   layout.ts         geometry batcher, street furniture, road-graph types, plot-number atlas
   theme.ts          what makes one map look like a different place from another
+  weather.ts        rain, dust, wet roads and thunder — two draw calls, no extra passes
+  police.ts         roadblocks, spike strips and the pooled search helicopter
+  jobs.ts           taxi / vigilante / paramedic shifts on one shared state machine
+  device.ts         touch detection, fullscreen and the landscape lock (and why it fails)
+  input.ts          keyboard + mouse + the virtual/analog layer the on-screen pad writes
   maps.ts           the map roster; builds only the one the player picked
   city.ts           the grid districts, the canal and its bridges — driven by a theme
   scheme.ts         the real Rahim Garden housing scheme, authored from its layout plan
@@ -234,7 +337,7 @@ game/
   combat.ts         authoritative bullet raycast, blood, decals, tracers (all pooled)
   camerarig.ts      third-person spring arm, over-shoulder aim, recoil, shake
   materials.ts      canvas-generated textures and the shared material set
-  sky.ts audio.ts minimap.ts input.ts settings.ts hudstore.ts
+  sky.ts audio.ts minimap.ts settings.ts hudstore.ts
 scripts/smoke.mjs   compiles game/ to ESM and runs tests/ in Node
 tests/              headless assertions (see below)
 _archive/           previous versions, kept for reference

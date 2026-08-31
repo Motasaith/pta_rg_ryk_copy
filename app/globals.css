@@ -861,3 +861,379 @@ input[type="range"]::-moz-range-thumb {
 @media(max-width:900px){.titlecard{grid-template-columns:1fr;align-content:start;padding-top:50px;gap:48px}.title-hero{max-width:620px}.titlecard h1{font-size:clamp(4.5rem,16vw,8rem)}.map-section{padding-bottom:50px}.quick-keys{display:none}}
 @media(max-width:590px){.title-topbar{height:60px}.wordmark small{display:none}.titlecard{width:88vw;padding-top:34px}.titlecard h1{font-size:21vw}.titlecard p{font-size:12px}.hero-actions{flex-direction:column}.hero-actions .btn{width:100%}.mappicker{grid-template-columns:1fr}.title-footer span:last-child{display:none}.load-art{opacity:.4}.load-car{display:none}}
 @media(prefers-reduced-motion:reduce){.load-car{animation:none}.fill{transition:none!important}.mapcard{transition:none}}
+
+/* ── weather, heat and side jobs ─────────────────────────────────────────── */
+.weatherchip {
+  margin-top: 6px;
+  align-self: flex-end;
+  padding: 3px 9px 4px;
+  border: 1px solid #3b4a57;
+  border-radius: 4px;
+  background: rgba(14, 20, 26, .6);
+  font-family: var(--sans);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  color: #9fc4d8;
+}
+/* the police have lost you: the stars pulse while the level ticks down */
+.stars.fading .star.lit { animation: starFade 0.75s ease-in-out infinite; }
+@keyframes starFade {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.18; }
+}
+
+/* one full-screen flash for lightning — no light, no extra render pass */
+.lightning {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: #dbe8f5;
+  mix-blend-mode: screen;
+}
+
+/* the helicopter has you */
+.spotlit {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 50% 45%, rgba(255, 243, 208, .17) 0%, rgba(255, 243, 208, 0) 46%);
+}
+
+.jobcard {
+  position: absolute;
+  top: 96px;
+  left: 22px;
+  min-width: 140px;
+  padding: 8px 12px 9px;
+  border-left: 3px solid var(--cyan);
+  border-radius: 3px;
+  background: rgba(10, 16, 22, .74);
+  font-family: var(--sans);
+}
+.jobcard b {
+  display: block;
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.2em;
+  color: var(--cyan);
+}
+.jobtime {
+  display: block;
+  margin-top: 3px;
+  font-family: var(--mono);
+  font-size: 21px;
+  font-weight: 600;
+  color: #eef4f8;
+  font-variant-numeric: tabular-nums;
+}
+.jobtime.low { color: #ff6b5a; animation: starFade 0.5s ease-in-out infinite; }
+.jobcard i {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-style: normal;
+  font-size: 11px;
+  color: #8fd8a8;
+}
+.jobcard em {
+  font-style: normal;
+  font-weight: 800;
+  color: #ffd166;
+}
+
+/* ══ TOUCH / MOBILE ═══════════════════════════════════════════════════════════
+   The on-screen pad, and the HUD rearrangement that makes room for two thumbs.
+   Everything here is behind .touchmode or a media query, so a desktop build is
+   byte-for-byte the same game it was.                                          */
+
+.touch {
+  position: fixed;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.touch button { -webkit-tap-highlight-color: transparent; touch-action: none; }
+
+/* the two thumb zones. Invisible: a painted box would only tell you where NOT
+   to put your thumb, and the stick already appears wherever you land. */
+.tstickzone {
+  position: absolute;
+  left: 0; bottom: 0;
+  width: 46%; height: 76%;
+  pointer-events: auto;
+}
+.tlook {
+  position: absolute;
+  right: 0; top: 0;
+  width: 56%; height: 100%;
+  pointer-events: auto;
+}
+
+.tstick {
+  position: fixed;
+  width: 118px; height: 118px;
+  margin: -59px 0 0 -59px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.22);
+  background: radial-gradient(circle, rgba(10, 18, 24, 0.42), rgba(10, 18, 24, 0.12));
+  pointer-events: none;
+  display: grid;
+  place-items: center;
+}
+.tstick i {
+  width: 54px; height: 54px;
+  border-radius: 50%;
+  background: rgba(125, 243, 255, 0.3);
+  border: 2px solid rgba(125, 243, 255, 0.75);
+  box-shadow: 0 0 18px rgba(125, 243, 255, 0.35);
+}
+
+.tbtns {
+  position: absolute;
+  right: calc(12px + env(safe-area-inset-right));
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  width: 216px;
+  display: flex;
+  flex-direction: row-reverse;
+  flex-wrap: wrap-reverse;
+  gap: 9px;
+  pointer-events: auto;
+}
+.tbtn {
+  width: 62px; height: 62px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.26);
+  background: rgba(12, 20, 27, 0.5);
+  backdrop-filter: blur(5px);
+  color: #dbe6ee;
+  font-family: var(--sans);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+.tbtn:active { background: rgba(125, 243, 255, 0.28); transform: scale(0.94); }
+.tbtn.fire {
+  width: 86px; height: 86px;
+  font-size: 12px;
+  border-color: rgba(255, 90, 78, 0.7);
+  background: rgba(120, 26, 22, 0.44);
+}
+.tbtn.aim { border-color: rgba(125, 243, 255, 0.6); }
+.tbtn.go {
+  width: 86px; height: 86px;
+  font-size: 12px;
+  border-color: rgba(75, 225, 192, 0.7);
+  background: rgba(18, 78, 66, 0.44);
+}
+.tbtn.stop { border-color: rgba(240, 163, 92, 0.65); background: rgba(92, 56, 20, 0.4); }
+
+.tutil {
+  position: absolute;
+  top: calc(8px + env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  pointer-events: auto;
+}
+.tutil button {
+  min-width: 44px;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  backdrop-filter: blur(6px);
+  color: var(--dim);
+  font-family: var(--sans);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+.tutil button.on { color: var(--ink); background: var(--cyan); border-color: var(--cyan); }
+
+.tguns {
+  position: absolute;
+  top: calc(48px + env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(300px, 74vw);
+  max-height: 56vh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(8, 13, 18, 0.94);
+  pointer-events: auto;
+}
+.tguns button {
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 12px;
+  text-align: left;
+}
+.tguns button.on { background: rgba(125, 243, 255, 0.16); color: var(--cyan); }
+
+/* ── rotate gate ─────────────────────────────────────────────────────────────
+   Not a nicety: iOS Safari has no Screen Orientation lock at all, so on an
+   iPhone this is the *only* thing that gets the player into landscape.        */
+.rotategate {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  padding: 32px;
+  text-align: center;
+  background: rgba(6, 10, 13, 0.97);
+}
+.rotateicon {
+  font-size: 64px;
+  line-height: 1;
+  color: var(--cyan);
+  animation: rotateHint 2s ease-in-out infinite;
+}
+@keyframes rotateHint {
+  0%, 40% { transform: rotate(0deg); }
+  60%, 100% { transform: rotate(90deg); }
+}
+.rotategate h2 {
+  font-family: var(--sans);
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.24em;
+  color: var(--amber);
+}
+.rotategate p { max-width: 30ch; font-size: 12px; line-height: 1.8; color: var(--text); }
+.rotategate small { max-width: 34ch; font-size: 10.5px; line-height: 1.7; color: var(--dim); }
+
+/* ── HUD rearranged for two thumbs ──────────────────────────────────────────
+   The radar moves out of the bottom-left because that is where the stick is,
+   and the weapon panel moves off the bottom-right because that is where the
+   buttons are. Nothing is hidden; it is all just somewhere a thumb is not.   */
+.touchmode .bottomleft {
+  bottom: auto;
+  top: calc(10px + env(safe-area-inset-top));
+  left: calc(10px + env(safe-area-inset-left));
+}
+.touchmode .radarwrap { width: 104px; height: 104px; }
+.touchmode .statrow { font-size: 10px; padding: 3px 7px; }
+.touchmode .topright {
+  top: calc(10px + env(safe-area-inset-top));
+  right: calc(10px + env(safe-area-inset-right));
+  padding: 7px 10px;
+}
+.touchmode .money { font-size: 17px; }
+.touchmode .bottomright {
+  right: auto;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(10px + env(safe-area-inset-bottom));
+  align-items: center;
+}
+.touchmode .wheel { display: none; }
+.touchmode .prompt { bottom: 128px; }
+.touchmode .jobcard { top: calc(124px + env(safe-area-inset-top)); left: calc(10px + env(safe-area-inset-left)); }
+.touchmode .cheatconsole { bottom: 50%; transform: translate(-50%, 50%); }
+.touchmode .killfeed { display: none; }
+.touchmode .viewport { cursor: default; }
+
+/* The utility row sits at top-centre, so the objective and toast move out from
+   under it rather than being covered by MAP and the weapon name. */
+.touchmode .topcentre { top: calc(50px + env(safe-area-inset-top)); }
+
+/* Short viewport (a phone on its side): shrink the panels that eat the most. */
+@media (max-height: 520px) {
+  .objective, .toast { font-size: 10.5px; padding: 5px 10px; }
+  .topright { padding: 6px 9px; }
+  .found, .clockrow { font-size: 9px; }
+  .weapon .wname { font-size: 10px; }
+  .speedo .kmh { font-size: 26px; }
+  .perf { font-size: 9px; }
+}
+
+/* Narrow viewport: the menus and the title have to stop being two columns. */
+@media (max-width: 760px) {
+  .titlecard { max-width: 100%; }
+  .titlecard h1 { font-size: clamp(38px, 13vw, 72px); }
+  .keys { gap: 4px; }
+  .keys span { font-size: 9.5px; padding: 3px 7px; }
+  .row { flex-wrap: wrap; }
+  .btn { flex: 1 1 46%; }
+  .panel { width: 100%; max-width: 100%; border-radius: 0; }
+  .panelbody { max-height: 62vh; }
+  .mappicker { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+}
+
+/* A phone on its side is 390px tall. The title screen has to put PLAY within
+   reach of the first screenful, so the reference material folds away — it is all
+   on the pad in-game anyway. */
+@media (max-height: 520px) and (pointer: coarse) {
+  .titlecard { padding-bottom: 24px; }
+  .titlecard p { display: none; }
+  .keys { display: none; }
+  .onlinehint, .mapnote { display: none; }
+  .titlecard h1 { font-size: clamp(30px, 9vh, 52px); margin-bottom: 4px; }
+  .maplabel { margin: 10px 0 6px; }
+  .mapcard span { display: none; }
+  .mapcard b { font-size: 11px; }
+  .mapswatch { height: 26px; }
+  .row { margin-top: 10px; }
+  .fineprint { margin-top: 8px; }
+}
+
+/* Coarse pointer: everything you can tap needs to be big enough to tap. */
+@media (pointer: coarse) {
+  .btn, .tab, .segbtn, .mapcard { min-height: 44px; }
+  .cheathint { padding: 10px 12px; }
+  .cheatinput input { font-size: 16px; }   /* < 16px makes iOS zoom the page on focus */
+}
+
+.netmapline {
+  margin-top: 6px;
+  font-family: var(--sans);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: var(--dim);
+}
+.netmapline b { color: var(--cyan); font-weight: 700; }
+
+/* Build + asset stamp on the title screen. The first thing to compare when two players
+   say the game "looks different" on their two machines. */
+.buildnote {
+  position: fixed;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  z-index: 30;
+  max-width: min(680px, 92vw);
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: rgba(8, 13, 18, 0.86);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+  text-align: center;
+}
+.buildnote.warn {
+  border-color: rgba(240, 163, 92, 0.6);
+  color: var(--amber);
+  border-radius: 10px;
+  line-height: 1.7;
+}

@@ -1,4 +1,4 @@
-import { clamp } from './mathx';
+import { clamp, lerp as lerpN } from './mathx';
 import { WeaponId } from './weapons';
 
 /**
@@ -29,6 +29,14 @@ export class GameAudio {
   private sirenGain: GainNode | null = null;
   private sirenT = 0;
   private ambientGain: GainNode | null = null;
+  /* Two more continuous voices. Both are one looping node each, started once and left
+     running at whatever gain the world asks for — creating a node per raindrop would
+     be the single most expensive thing in the game. */
+  private rainSrc: AudioBufferSourceNode | null = null;
+  private rainGain: GainNode | null = null;
+  private rotorOsc: OscillatorNode | null = null;
+  private rotorGain: GainNode | null = null;
+  private rotorT = 0;
   ready = false;
 
   /** Fetch the sample files at boot. Missing files just keep the synth voice. */
@@ -287,6 +295,77 @@ export class GameAudio {
     this.engineFilter = null;
   }
 
+  /**
+   * Rain. One looping noise buffer through a lowpass, gain-tracked to the storm — the
+   * hiss gets darker as it gets heavier, which is most of what sells "heavy" over "light".
+   */
+  rainLevel(vol: number): void {
+    if (!this.ctx) return;
+    if (vol < 0.005 && !this.rainSrc) return;
+    if (!this.rainSrc) {
+      this.rainGain = this.ctx.createGain();
+      this.rainGain.gain.value = 0;
+      const f = this.ctx.createBiquadFilter();
+      f.type = 'lowpass';
+      f.frequency.value = 5200;
+      f.Q.value = 0.4;
+      this.rainSrc = this.ctx.createBufferSource();
+      this.rainSrc.buffer = this.noise;
+      this.rainSrc.loop = true;
+      this.rainSrc.connect(f).connect(this.rainGain).connect(this.sfx);
+      this.rainSrc.start();
+    }
+    this.rainGain!.gain.setTargetAtTime(clamp(vol, 0, 1) * 0.09, this.ctx.currentTime, 0.6);
+  }
+
+  /** A crack, then a long roll away into the distance. `near` 0..1 sets which dominates. */
+  thunder(near = 0.5): void {
+    if (!this.ctx) return;
+    const delay = lerpN(1.9, 0.12, near);
+    this.burst(0.5 + near * 0.4, 0.16 + near * 0.5, 320 + near * 2600, 0.6, 'lowpass', delay);
+    this.burst(2.6, 0.14 + near * 0.16, 180, 0.9, 'lowpass', delay + 0.18);
+    this.tone('sine', 62, 34, 2.2, 0.1 + near * 0.1, delay + 0.1);
+  }
+
+  /**
+   * Helicopter. A low blade-slap whose rate rides the rotor, plus a turbine whine —
+   * two oscillators total, gain-tracked to distance, so a chopper overhead costs the
+   * same as a car engine.
+   */
+  rotorLevel(dt: number, vol: number): void {
+    if (!this.ctx) return;
+    if (vol < 0.005) {
+      if (this.rotorGain) this.rotorGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.25);
+      return;
+    }
+    if (!this.rotorOsc) {
+      this.rotorGain = this.ctx.createGain();
+      this.rotorGain.gain.value = 0;
+      const f = this.ctx.createBiquadFilter();
+      f.type = 'lowpass';
+      f.frequency.value = 320;
+      this.rotorOsc = this.ctx.createOscillator();
+      this.rotorOsc.type = 'sawtooth';
+      this.rotorOsc.frequency.value = 46;
+      this.rotorOsc.connect(f).connect(this.rotorGain).connect(this.sfx);
+      this.rotorOsc.start();
+    }
+    this.rotorT += dt;
+    // the chop: a slow tremolo on the blade frequency
+    const chop = 0.5 + 0.5 * Math.sin(this.rotorT * 34);
+    this.rotorOsc.frequency.setTargetAtTime(40 + chop * 16, this.ctx.currentTime, 0.02);
+    this.rotorGain!.gain.setTargetAtTime(clamp(vol, 0, 1) * (0.05 + chop * 0.05), this.ctx.currentTime, 0.05);
+  }
+
+  /** Short procedural pedestrian bark — a couple of formant blips, not speech. */
+  chatter(pitch = 1): void {
+    if (!this.ctx) return;
+    const f0 = 210 * pitch;
+    for (let i = 0; i < 3; i++) {
+      this.tone('sawtooth', f0 * (1 + i * 0.12), f0 * (0.85 + i * 0.1), 0.07, 0.035, i * 0.085);
+    }
+  }
+
   sirenOn(): void {
     if (!this.ctx || this.sirenOsc) return;
     this.sirenGain = this.ctx.createGain();
@@ -319,6 +398,12 @@ export class GameAudio {
   dispose(): void {
     this.engineOff();
     this.sirenOff();
+    this.rainSrc?.stop();
+    this.rainSrc = null;
+    this.rainGain = null;
+    this.rotorOsc?.stop();
+    this.rotorOsc = null;
+    this.rotorGain = null;
     this.ambientGain = null;
     if (this.ctx) void this.ctx.close();
     this.ctx = null;

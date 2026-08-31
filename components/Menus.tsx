@@ -94,6 +94,8 @@ export interface RosterEntry {
 export interface NetUi {
   status: 'offline' | 'connecting' | 'online' | 'error';
   room: string;
+  /** the map the room settled on, which may not be the one this player picked */
+  map: string;
   error: string;
   peers: number;
   names: string[];
@@ -228,6 +230,12 @@ export function PauseMenu({
             <>
               <Toggle label="Blood and gore" value={settings.blood} onChange={(v) => set('blood', v)} />
               <Toggle label="Day / night cycle" value={settings.dayNight} onChange={(v) => set('dayNight', v)} hint="Off pins the clock at noon." />
+              <Toggle
+                label="Weather"
+                value={settings.weather}
+                onChange={(v) => set('weather', v)}
+                hint="Rain and dust storms. Wet roads really are more slippery."
+              />
               <div className="hintline">
                 Wanted level rises when you fire in public, hit someone, or run people over. Lose
                 the cops by breaking line of sight for about fifteen seconds.
@@ -322,8 +330,10 @@ function OnlinePanel({ net }: { net: NetUi }) {
         <div className="netroom">
           <div className="netlabel">{net.status === 'online' ? 'ROOM CODE' : 'CONNECTING…'}</div>
           <div className="netcode">{net.room}</div>
+          {net.map && <div className="netmapline">PLAYING <b>{net.map}</b></div>}
           <div className="hintline">
-            Share this code. Up to 8 players in the city at once.
+            Share this code. Up to 8 players in the city at once. Everyone plays the map
+            the first player picked.
             {net.host && ' You are hosting the traffic for this room.'}
           </div>
         </div>

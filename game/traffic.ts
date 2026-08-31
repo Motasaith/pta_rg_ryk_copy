@@ -178,6 +178,24 @@ export class Traffic {
     return v;
   }
 
+  /**
+   * A SWAT enforcer van: the same chase AI as a cruiser in a heavier, slower body.
+   *
+   * Reuses the existing `van` class rather than adding a vehicle kind, because the kind
+   * is packed into four bits on the network wire and a new one would cost every client
+   * a protocol bump for what is, visually, a black panel van.
+   */
+  spawnEnforcer(x: number, z: number, yaw: number): Vehicle {
+    const v = createVehicle('van', 0x14171c);
+    this.scene.add(v.group);
+    placeVehicle(v, x, z, yaw);
+    v.siren = true;
+    v.ai = { from: 0, to: 0, t: 0, wait: 0, chase: true };
+    updateVehicleBox(v);
+    this.cars.push(v);
+    return v;
+  }
+
   /** Hand a traffic car over to the player. */
   release(v: Vehicle): void {
     this.lanes.delete(v);

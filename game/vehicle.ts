@@ -96,6 +96,8 @@ export interface Vehicle {
   isPlayer: boolean;
   siren: boolean;
   alarmT: number;
+  /** Seconds of shredded tyres left after a spike strip: less grip, less top speed. */
+  spikeT: number;
   box: Box;
   /** traffic AI state (null once a human takes the wheel) */
   ai: null | { from: number; to: number; t: number; wait: number; chase: boolean };
@@ -563,6 +565,7 @@ function finishVehicle(
     brakeLight, headLight, lightbar,
     x: 0, y: 0, z: 0, yaw: 0, vx: 0, vz: 0, speed: 0, steerAngle: 0, wheelSpin: 0,
     health: 100,
+    spikeT: 0,
     boost: 1, boosting: false, boostLock: false,
     ctrl: { throttle: 0, brake: 0, steer: 0, handbrake: false, boost: false },
     driver: null, isPlayer: false, siren: false, alarmT: 0,
@@ -590,6 +593,19 @@ export function updateVehicleBox(v: Vehicle): void {
  * Forward speed is driven directly; lateral velocity is bled off by grip, which is what
  * produces believable understeer, handbrake slides and the inability to turn on the spot.
  */
+/**
+ * How grippy the world's surface is right now, 0..1, set once a frame by the engine.
+ *
+ * A module local rather than another argument on stepVehicle: traffic.ts steps forty
+ * cars a frame through the same function, and weather that only slid the *player* around
+ * would look like a bug rather than like rain.
+ */
+let SURFACE_GRIP = 1;
+
+export function setSurfaceGrip(g: number): void {
+  SURFACE_GRIP = g;
+}
+
 export function stepVehicle(v: Vehicle, dt: number, phys: Physics): void {
   const s = v.spec;
   const c = v.ctrl;
@@ -606,7 +622,10 @@ export function stepVehicle(v: Vehicle, dt: number, phys: Physics): void {
   else v.boost = Math.min(1, v.boost + dt / (s.boostTime * 2.6));
   v.boosting = wantBoost;
   const boostK = wantBoost ? s.boostPower : 1;
-  const vmax = s.maxSpeed * (wantBoost ? 1.22 : 1);
+  // Shredded tyres cap you at a limp: the point of a spike strip is that you cannot
+  // simply outrun the roadblock you just drove through.
+  v.spikeT = Math.max(0, v.spikeT - dt);
+  const vmax = s.maxSpeed * (wantBoost ? 1.22 : 1) * (v.spikeT > 0 ? 0.42 : 1);
 
   // ── drivetrain
   // Torque falls away with speed and aero drag rises with its square; the drag constant is
@@ -644,7 +663,9 @@ export function stepVehicle(v: Vehicle, dt: number, phys: Physics): void {
   // Tyres can only generate so much lateral force: cap the turn rate by the cornering
   // limit. This is what stops a 330 km/h car from turning like a shopping trolley, and it
   // leaves low-speed parking as tight as ever.
-  const latLimit = s.grip * 1.5;
+  // Wet tarmac and shredded tyres both come off the same cornering limit.
+  const surf = SURFACE_GRIP * (v.spikeT > 0 ? 0.55 : 1);
+  const latLimit = s.grip * 1.5 * surf;
   const yawCap = latLimit / Math.max(sp, 1.2);
   yawRate = clamp(yawRate, -yawCap, yawCap);
   v.yaw += yawRate * dt;
@@ -655,7 +676,7 @@ export function stepVehicle(v: Vehicle, dt: number, phys: Physics): void {
   let vf = v.vx * fx + v.vz * fz;
   let vs = v.vx * rx + v.vz * rz;
   vf = damp(vf, v.speed, 14, dt);
-  const grip = c.handbrake ? s.driftGrip : s.grip;
+  const grip = (c.handbrake ? s.driftGrip : s.grip) * surf;
   vs *= Math.exp(-grip * dt);
   // sliding scrubs speed
   v.speed -= Math.min(Math.abs(v.speed), Math.abs(vs) * 0.35 * dt);
@@ -822,6 +843,56 @@ export function seatWorld(v: Vehicle, out: THREE.Vector3): THREE.Vector3 {
 export function lerpColour(a: number, b: number, t: number): number {
   const ca = new THREE.Color(a), cb = new THREE.Color(b);
   return ca.lerp(cb, t).getHex();
+}
+
+/**
+ * Respray a car.
+ *
+ * Three cases, because there are three ways a car can be painted here:
+ *
+ *  1. A downloaded body with tintable materials — a colour write, per-car clones already.
+ *  2. A downloaded body whose whole shell is one baked texture atlas. The spawn tint
+ *     deliberately skips those (multiplying an atlas would muddy the lights and trim),
+ *     but a respray *should* change them, so the atlas material is cloned for this car
+ *     and multiplied. The livery survives as shading under the new colour, which is what
+ *     a real respray over a two-tone car looks like anyway.
+ *  3. The procedural body, which bakes its paint into vertex colours on one merged mesh
+ *     shared with every other procedural car. Rewriting the buffer would flatten the
+ *     bumpers and trim baked into it, so that too gets a per-car material clone.
+ *
+ * In every case the material is cached on the mesh, so respraying the same car twenty
+ * times creates one extra material, not twenty.
+ */
+export function paintVehicle(v: Vehicle, hex: number): void {
+  v.colour = hex;
+
+  let painted = false;
+  const coat = (m: THREE.Mesh, onlyTagged: boolean): void => {
+    if (!m.isMesh || m.userData.lights) return;
+    if (onlyTagged && !m.userData.tintable) return;
+    const list = Array.isArray(m.material) ? m.material : [m.material];
+    for (let i = 0; i < list.length; i++) {
+      const cur = list[i] as THREE.MeshStandardMaterial;
+      if (!cur || !cur.color) continue;
+      // leave glazing alone, or the windows turn the same colour as the panels
+      if (cur.transparent && cur.opacity < 0.92) continue;
+      let mat = m.userData.sprayMat as THREE.MeshStandardMaterial | undefined;
+      if (!mat) {
+        mat = cur.clone();
+        m.userData.sprayMat = mat;
+        if (Array.isArray(m.material)) (m.material as THREE.Material[])[i] = mat;
+        else m.material = mat;
+      }
+      mat.color.set(hex);
+      painted = true;
+    }
+  };
+
+  // Pass one: only the panels the model itself says are paint.
+  v.bodyPivot.traverse((o) => coat(o as THREE.Mesh, true));
+  if (painted) return;
+  // Pass two: nothing was tagged, so this is an atlas or procedural body. Coat the lot.
+  v.bodyPivot.traverse((o) => coat(o as THREE.Mesh, false));
 }
 
 export const CAR_COLOURS = [

@@ -74,6 +74,14 @@ export class GameRoom extends DurableObject<Env> {
   private mode = 'freeroam';
   private isPublic = false;
   private hostId = 0;
+  /**
+   * Which map the room is playing, as a roster index.
+   *
+   * Set by the first person through the door and then fixed for the life of the room:
+   * players in different cities are not in the same game, and letting a joiner pick
+   * would silently split the room in two.
+   */
+  private map = -1;
   private match: Match = { mode: MODE_FREEROAM, state: MATCH_LOBBY, scoreA: 0, scoreB: 0, target: TDM_TARGET };
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -86,6 +94,8 @@ export class GameRoom extends DurableObject<Env> {
       if (saved) this.match = saved;
       const host = await ctx.storage.get<number>('host');
       if (typeof host === 'number') this.hostId = host;
+      const map = await ctx.storage.get<number>('map');
+      if (typeof map === 'number') this.map = map;
     });
   }
 
@@ -227,8 +237,13 @@ export class GameRoom extends DurableObject<Env> {
       this.hostId = id;
       void this.ctx.storage.put('host', id);
     }
+    // First one in picks the city; everyone after is told what it is.
+    if (this.map < 0) {
+      this.map = hello.map;
+      void this.ctx.storage.put('map', this.map);
+    }
 
-    ws.send(encodeWelcome(id, team, this.hostId, peers));
+    ws.send(encodeWelcome(id, team, this.hostId, Math.max(0, this.map), peers));
     ws.send(encodeMatchOut(this.match));
     const joined = encodeJoin({ id, name, team });
     for (const other of this.ctx.getWebSockets()) {

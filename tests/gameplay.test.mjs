@@ -384,6 +384,280 @@ console.log('\npolice');
   ok(Math.hypot(cop.x - rx, cop.z - rz) < 14, `the cop closed in (now ${Math.hypot(cop.x - rx, cop.z - rz).toFixed(1)}m away)`);
   ok(shots > 3, `the cop opened fire ${shots} times in 6s`);
   ok(cop.aiming, 'the cop is holding an aiming pose while shooting');
+
+  // 4-star tier: the same AI in body armour, with a rifle and a lot more health
+  const swat = peds.spawnPed(true, rx + 4, rz + 16, true);
+  ok(swat.swat && swat.cop, 'a SWAT enforcer is still a cop');
+  ok(swat.health > cop.health, `and takes far more killing (${swat.health} vs ${cop.health})`);
+  ok(swat.h.gunMount.children.length > 0, 'and turns up carrying a rifle');
+  ok(swat.h.meshes.some((m) => m.geometry), 'the armoured look reuses the same humanoid rig');
+}
+
+/* -- weather ------------------------------------------------------------- */
+console.log('\nweather');
+{
+  const { Weather } = await import('./weather.js');
+  const { Sky } = await import('./sky.js');
+  const scene = new THREE.Scene();
+  const mats = buildMaterials();
+  const sky = new Sky(scene, 0, 512, false);
+  sky.setHour(12);
+  const w = new Weather(scene, mats);
+  const fog = new THREE.Fog(0x8899aa, 100, 400);
+
+  const dryRough = mats.asphalt.roughness;
+  const dryColour = mats.asphalt.color.clone();
+  ok(w.gripScale() === 1, 'dry tarmac has full grip');
+
+  w.set('rain', true);
+  for (let i = 0; i < 60 * 8; i++) w.update(DT, i * DT, 0, 2, 0, sky, fog, 400);
+  ok(mats.asphalt.roughness < dryRough * 0.5,
+    `wet tarmac is smoother (${dryRough.toFixed(2)} -> ${mats.asphalt.roughness.toFixed(2)})`);
+  ok(mats.asphalt.color.r < dryColour.r * 0.9, 'and darker');
+  ok(w.gripScale() < 0.75, `and less grippy (${w.gripScale().toFixed(2)})`);
+  ok(fog.far < 400 * 0.6, `you cannot see as far (${fog.far.toFixed(0)}m)`);
+
+  // The whole point of the implementation: no per-frame allocation, one object each.
+  const rainObj = scene.children.find((c) => c.isLineSegments);
+  const dustObj = scene.children.find((c) => c.isPoints);
+  ok(rainObj && dustObj, 'rain and dust are one object each');
+  const before = rainObj.geometry.attributes.position.count;
+  for (let i = 0; i < 240; i++) w.update(DT, i * DT, 0, 2, 0, sky, fog, 400);
+  ok(rainObj.geometry.attributes.position.count === before,
+    `the rain never respawns a particle on the CPU (${before} vertices, constant)`);
+  ok(rainObj.visible && !dustObj.visible, 'only the active weather is drawn');
+
+  let thunder = 0;
+  for (let i = 0; i < 60 * 120; i++) {
+    w.update(DT, i * DT, 0, 2, 0, sky, fog, 400);
+    if (w.thunderCue) thunder++;
+  }
+  ok(thunder > 2, `${thunder} thunderclaps in two minutes of storm`);
+
+  // The sun and sky are *scaled* by the storm, so a long spell must not compound them
+  // down to black — the bug that eats a world when the day/night cycle is switched off.
+  const litSun = sky.sun.intensity;
+  ok(litSun > 0.05, `the sun is still lit after two minutes of storm (${litSun.toFixed(2)})`);
+
+  w.set('clear', true);
+  for (let i = 0; i < 60 * 60; i++) w.update(DT, i * DT, 0, 2, 0, sky, fog, 400);
+  ok(Math.abs(mats.asphalt.roughness - dryRough) < 0.02, 'the road dries out again');
+  ok(sky.sun.intensity > litSun, 'and the sun comes back out');
+  w.dispose();
+  ok(mats.asphalt.roughness === dryRough && mats.asphalt.color.equals(dryColour),
+    'disposing hands the shared materials back exactly as they were');
+}
+
+/* -- police escalation --------------------------------------------------- */
+console.log('\npolice escalation');
+{
+  const { PoliceOps } = await import('./police.js');
+  const scene = new THREE.Scene();
+  const phys = new Physics();
+  const mats = buildMaterials();
+  const C = city.buildCity(scene, phys, mats, QUALITY.medium, 20260805);
+  const ops = new PoliceOps(scene, phys, C, mats);
+
+  const px = city.roadCoord(2), pz = city.blockCentre(1);
+  const dyn = [];
+  ops.update(DT, 0, 2, px, 0.2, pz, 0, 1);
+  ops.addColliders(dyn);
+  ok(dyn.length === 0, 'no roadblocks below three stars');
+
+  for (let i = 0; i < 60 * 6; i++) ops.update(DT, i * DT, 3, px, 0.2, pz, 0, 1);
+  dyn.length = 0;
+  ops.addColliders(dyn);
+  ok(dyn.length >= 2, `${dyn.length} barrier colliders deployed at three stars`);
+  const ahead = dyn.every((b) => (b.minZ + b.maxZ) / 2 > pz);
+  ok(ahead, 'every barrier is in front of the player, not behind them');
+
+  // the spike strip has to actually catch a car driving into the block
+  const blocked = dyn[0];
+  const car = createVehicle('sedan', 0x884422);
+  placeVehicle(car, (blocked.minX + blocked.maxX) / 2, (blocked.minZ + blocked.maxZ) / 2, 0);
+  ok(ops.spikeHit(car), 'driving into the block shreds the tyres');
+  car.spikeT = 20;
+  ok(!ops.spikeHit(car), 'and it only counts once');
+
+  // Top speed on a puncture, measured on open ground so the city cannot get in the way.
+  const top = SPECS.sedan.maxSpeed;
+  const open = new Physics();
+  open.build();
+  const flat = createVehicle('sedan', 0x884422);
+  placeVehicle(flat, 0, 0, 0);
+  flat.ctrl.throttle = 1;
+  flat.spikeT = 40;
+  for (let i = 0; i < 60 * 20; i++) stepVehicle(flat, DT, open);
+  ok(flat.speed < top * 0.5, `a car on shredded tyres cannot outrun the block (${(flat.speed * 3.6).toFixed(0)} km/h)`);
+  flat.spikeT = 0;
+  for (let i = 0; i < 60 * 25; i++) stepVehicle(flat, DT, open);
+  ok(flat.speed > top * 0.9, `and gets it back once they are replaced (${(flat.speed * 3.6).toFixed(0)} km/h)`);
+
+  ops.update(DT, 0, 5, px, 0.2, pz, 0, 1);
+  ok(ops.rotorVolume > 0 && ops.spotted, 'the search helicopter turns up at five stars');
+  ops.update(DT, 0, 0, px, 0.2, pz, 0, 1);
+  ok(!ops.spotted && ops.rotorVolume === 0, 'and leaves the moment the heat does');
+  dyn.length = 0;
+  ops.addColliders(dyn);
+  ok(dyn.length === 0, 'the roadblocks come down too');
+}
+
+/* -- garages, side jobs and street aggro --------------------------------- */
+console.log('\ngarages + side jobs');
+{
+  const { MAPS } = await import('./maps.js');
+  const { Jobs, jobFor, JOB_NAME } = await import('./jobs.js');
+  const { paintVehicle } = await import('./vehicle.js');
+  const scene = new THREE.Scene();
+  const phys = new Physics();
+  const mats = buildMaterials();
+  const C = city.buildCity(scene, phys, mats, QUALITY.medium, 20260805);
+
+  ok(C.garages.length >= 2, `${C.garages.length} respray bays on the map`);
+  let missing = 0;
+  for (const m of MAPS) {
+    const p2 = new Physics(); const s2 = new THREE.Scene();
+    const built = m.build(s2, p2, mats, QUALITY.medium, 20260805);
+    if (built.garages.length < 1) missing++;
+  }
+  ok(missing === 0, 'every map ships at least one bay');
+
+  // you must be able to drive into a bay: nothing solid may stand in the doorway
+  let blockedBays = 0;
+  for (const g of C.garages) {
+    const h = phys.groundHeight(g.x, g.z - 4, 1.0, 2);
+    phys.resolveCircle(g.x, g.z - 4, 1.0, h, h + 1.6, 0.3, false);
+    if (phys.outHit) blockedBays++;
+  }
+  ok(blockedBays === 0, 'every bay has a clear approach');
+
+  const car = createVehicle('sedan', 0x884422);
+  paintVehicle(car, 0x2b1a4d);
+  ok(car.colour === 0x2b1a4d, 'a respray changes the recorded colour');
+
+  ok(jobFor(createVehicle('rickshaw', 0)) === 'taxi', 'a rickshaw is a taxi');
+  ok(jobFor(createVehicle('police', 0)) === 'vigilante', 'a cruiser is vigilante work');
+  ok(jobFor(createVehicle('van', 0)) === 'medic', 'a van is an ambulance');
+  ok(jobFor(createVehicle('hyper', 0)) === null, 'a hypercar is not licensed for anything');
+
+  const peds2 = new PedManager(scene, phys, C);
+  peds2.populate(24);
+  const jobs = new Jobs(scene, C, peds2);
+  const taxi = createVehicle('rickshaw', 0);
+  const sx = C.playerStart.x, sz = C.playerStart.z;
+  placeVehicle(taxi, sx, sz, 0);
+  let paid = 0;
+  jobs.onPayout = (amount) => { paid += amount; };
+  const msg = jobs.toggle(taxi, sx, sz, []);
+  ok(jobs.active && msg.includes(JOB_NAME.taxi), `shift starts: "${msg}"`);
+  ok(jobs.stage === 'toPickup', 'first leg is the pickup');
+
+  taxi.x = jobs.targetX; taxi.z = jobs.targetZ;
+  jobs.update(DT, taxi, taxi.x, taxi.z, []);
+  ok(jobs.stage === 'toDrop', 'collecting the fare advances the leg');
+  taxi.x = jobs.targetX; taxi.z = jobs.targetZ;
+  jobs.update(DT, taxi, taxi.x, taxi.z, []);
+  ok(paid > 0 && jobs.streak === 1, `the drop-off paid Rs.${paid}`);
+
+  let failed = '';
+  jobs.onFail = (m) => { failed = m; };
+  jobs.update(DT, null, taxi.x, taxi.z, []);
+  ok(!jobs.active && failed !== '', `leaving the vehicle ends the shift ("${failed}")`);
+
+  // street aggro: a provoked civilian squares up and swings
+  const victim = peds2.peds.find((p) => !p.cop && p.state !== 'dead');
+  let barked = '';
+  let swings = 0;
+  peds2.onChatter = (p, line) => { barked = line; };
+  peds2.onSwing = () => { swings++; };
+  victim.x = sx + 3; victim.z = sz;
+  peds2.provoke(victim, sx, sz, 1);
+  ok(victim.state === 'aggro' && barked !== '', `they square up and shout "${barked}"`);
+  for (let i = 0; i < 60 * 5; i++) peds2.update(DT, i * DT, sx, 0.2, sz, true, 0, () => {}, 400);
+  ok(swings > 0, `and land ${swings} punches in five seconds`);
+  for (let i = 0; i < 60 * 30; i++) peds2.update(DT, i * DT, sx, 0.2, sz, true, 0, () => {}, 400);
+  ok(victim.state !== 'aggro', 'the rage wears off rather than lasting for ever');
+
+  const before = peds2.peds.length;
+  const driver = peds2.summonDriver(sx + 2, sz + 2, sx, sz);
+  ok(driver !== null && peds2.peds.length === before,
+    'a driver getting out borrows an off-screen pedestrian instead of spawning one');
+}
+
+/* -- touch input layer ---------------------------------------------------- */
+console.log('\ntouch controls');
+{
+  const stub = { addEventListener() {}, removeEventListener() {} };
+  const i = new Input(stub, DEFAULT_BINDS);
+
+  ok(!i.touch, 'a fresh session is not a touch session');
+  i.markTouch();
+  ok(i.touch, 'the first tap switches the UI to the pad');
+
+  // held buttons
+  i.setVirtual('jump', true);
+  ok(i.isDown('jump'), 'an on-screen button reads as held');
+  ok(i.justPressed('jump'), 'and as a fresh press on the frame it went down');
+  i.endFrame();
+  ok(i.isDown('jump') && !i.justPressed('jump'),
+    'still held on the next frame, but no longer a new press');
+  i.setVirtual('jump', false);
+  ok(!i.isDown('jump'), 'and released when the finger lifts');
+
+  // taps
+  i.tapVirtual('use');
+  ok(i.justPressed('use'), 'a tap registers as one press');
+  i.endFrame();
+  ok(!i.justPressed('use') && !i.isDown('use'), 'and is gone the very next frame');
+
+  // consume() has to reach the virtual edge too, or one tap of E gets you out of a car
+  // and straight back into it — the exact bug the keyboard path already guards against.
+  i.tapVirtual('use');
+  i.consume('use');
+  ok(!i.justPressed('use'), 'a consumed tap is not seen twice in the same frame');
+  i.endFrame();
+
+  // the analog stick
+  ok(i.axis('left', 'right') === 0 && i.axis('back', 'forward') === 0, 'centred stick is zero');
+  i.stickX = 0.5;
+  i.stickY = -0.25;
+  ok(Math.abs(i.axis('left', 'right') - 0.5) < 1e-9, 'half-right steers half right, not fully');
+  ok(Math.abs(i.axis('back', 'forward') + 0.25) < 1e-9, 'and pulling back is negative');
+  i.stickX = 1;
+  ok(i.axis('left', 'right') === 1, 'full deflection is exactly 1, never more');
+
+  // keyboard and stick coexist: a desktop player is unaffected by any of this
+  i.stickX = 0;
+  i.stickY = 0;
+  ok(i.axis('left', 'right') === 0, 'releasing the stick hands the axis back to the keys');
+
+  // firing
+  i.setButton(0, true);
+  ok(i.buttons[0] && i.buttonEdge[0], 'FIRE presses the same button the mouse does');
+  i.endFrame();
+  ok(i.buttons[0] && !i.buttonEdge[0], 'holding it stays down without re-triggering');
+  i.setButton(0, false);
+  ok(!i.buttons[0], 'and lets go');
+
+  // looking, with no pointer lock to be had
+  i.mouseDX = 0;
+  i.mouseDY = 0;
+  ok(!i.locked, 'touch never has the pointer locked');
+  i.look(12, -4);
+  i.look(3, 1);
+  ok(i.mouseDX === 15 && i.mouseDY === -3, 'a drag accumulates exactly like mouse movement');
+  i.endFrame();
+  ok(i.mouseDX === 0, 'and is drained once a frame, so the turn rate is frame-rate independent');
+
+  // a paused game must not still be being driven by a thumb that is resting on the glass
+  i.setVirtual('forward', true);
+  i.stickX = 1;
+  i.enabled = false;
+  ok(!i.isDown('forward') && i.axis('left', 'right') === 0, 'a disabled input ignores the pad');
+  i.enabled = true;
+  i.clearVirtual();
+  ok(!i.isDown('forward') && i.stickX === 0 && !i.buttons[0],
+    'clearVirtual lets go of everything at once');
 }
 
 console.log(`\n${fails === 0 ? 'ALL PASS' : fails + ' FAILURES'}\n`);

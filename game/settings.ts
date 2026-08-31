@@ -41,7 +41,7 @@ export const QUALITY: Record<Quality, QualityPreset> = {
 export const ACTIONS = [
   'forward', 'back', 'left', 'right', 'sprint', 'jump', 'crouch', 'use', 'reload',
   'fists', 'knife', 'sword', 'pistol', 'smg', 'ak47', 'shotgun', 'sniper', 'rpg', 'minigun',
-  'horn', 'map',
+  'horn', 'map', 'job',
 ] as const;
 
 export type Action = (typeof ACTIONS)[number];
@@ -68,6 +68,7 @@ export const ACTION_LABEL: Record<Action, string> = {
   minigun: '0: Minigun',
   horn: 'Horn',
   map: 'Full map',
+  job: 'Start / end a side job',
 };
 
 export type Binds = Record<Action, string[]>;
@@ -94,6 +95,8 @@ export const DEFAULT_BINDS: Binds = {
   minigun: ['Digit0'],
   horn: ['KeyH'],
   map: ['Tab', 'KeyM'],
+  // Not Digit2: you can shoot from a car, so the number row stays the weapon wheel.
+  job: ['KeyJ'],
 };
 
 export interface Settings {
@@ -110,6 +113,8 @@ export interface Settings {
   music: number;
   blood: boolean;
   dayNight: boolean;
+  /** Rain, dust and the wet-road handling that comes with them. */
+  weather: boolean;
   showFps: boolean;
   cameraShake: boolean;
   binds: Binds;
@@ -127,6 +132,7 @@ export const DEFAULT_SETTINGS: Settings = {
   music: 0.35,
   blood: true,
   dayNight: true,
+  weather: true,
   showFps: false,
   cameraShake: true,
   binds: DEFAULT_BINDS,
@@ -134,18 +140,36 @@ export const DEFAULT_SETTINGS: Settings = {
 
 const KEY = 'rgc.settings.v1';
 
+/**
+ * First-run defaults for the machine we are actually on.
+ *
+ * A phone running the desktop "medium" preset renders at 1.35x device pixel ratio on a
+ * 3x screen with shadows on, and drops to single figures. Anyone can still turn it up in
+ * Pause -> Display; this only decides what they meet first.
+ */
+function defaultsForDevice(): Settings {
+  const s = structuredClone(DEFAULT_SETTINGS);
+  if (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
+    && matchMedia('(hover: none)').matches) {
+    s.quality = 'low';
+    s.sensitivity = 0.55;      // a thumb drag covers far more screen than a mouse
+    s.aimSensitivity = 0.4;
+  }
+  return s;
+}
+
 export function loadSettings(): Settings {
   if (typeof localStorage === 'undefined') return structuredClone(DEFAULT_SETTINGS);
   try {
     const raw = localStorage.getItem(KEY);
-    if (!raw) return structuredClone(DEFAULT_SETTINGS);
+    if (!raw) return defaultsForDevice();
     const parsed = JSON.parse(raw) as Partial<Settings>;
-    const merged: Settings = { ...structuredClone(DEFAULT_SETTINGS), ...parsed };
+    const merged: Settings = { ...defaultsForDevice(), ...parsed };
     // Never trust persisted binds: a missing action would break input silently.
     merged.binds = { ...structuredClone(DEFAULT_BINDS), ...(parsed.binds ?? {}) };
     return merged;
   } catch {
-    return structuredClone(DEFAULT_SETTINGS);
+    return defaultsForDevice();
   }
 }
 

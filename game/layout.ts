@@ -68,6 +68,16 @@ export interface Shop {
   kind: 'food' | 'ammo' | 'health';
 }
 
+/** A Pay 'n' Spray bay: drive in and the car comes out clean, whole and a new colour. */
+export interface Garage {
+  /** the middle of the bay, where the car has to end up */
+  x: number;
+  z: number;
+  /** which way the car is facing when it drives in */
+  yaw: number;
+  name: string;
+}
+
 export interface MinimapData {
   roads: { x1: number; z1: number; x2: number; z2: number; w: number }[];
   blocks: { x: number; z: number; s: number }[];
@@ -93,6 +103,7 @@ export interface City {
   parkSpots: { x: number; z: number; yaw: number }[];
   roadSpawns: { x: number; z: number; yaw: number }[];
   shops: Shop[];
+  garages: Garage[];
   pois: Poi[];
   minimap: MinimapData;
   itemSpots: { x: number; y: number; z: number }[];
@@ -117,6 +128,7 @@ export interface Collect {
   parkSpots: { x: number; z: number; yaw: number }[];
   roadSpawns: { x: number; z: number; yaw: number }[];
   shops: Shop[];
+  garages: Garage[];
   pois: Poi[];
   itemSpots: { x: number; y: number; z: number }[];
   pickupSpots: { x: number; z: number }[];
@@ -129,7 +141,7 @@ export interface Collect {
 export function newCollect(): Collect {
   return {
     minimap: { roads: [], blocks: [], buildings: [], parks: [], water: [], labels: [] },
-    pedLoops: [], parkSpots: [], roadSpawns: [], shops: [], pois: [],
+    pedLoops: [], parkSpots: [], roadSpawns: [], shops: [], garages: [], pois: [],
     itemSpots: [], pickupSpots: [], lampPts: [], signs: [], nodes: [], waterZones: [],
   };
 }

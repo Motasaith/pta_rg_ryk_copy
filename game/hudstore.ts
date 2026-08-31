@@ -45,9 +45,28 @@ export interface HudState {
   mapName: string;
   /** 0..1 how far under water we are; the HUD tints and warns */
   drowning: number;
+  /** '', 'DRIZZLE', 'HEAVY RAIN' or 'DUST HAZE' */
+  weather: string;
+  /** 0..1, decaying: the last lightning strike */
+  lightning: number;
+  /** the police have lost sight of you and the stars are ticking down */
+  wantedFading: boolean;
+  /** the search helicopter has you in its beam */
+  spotted: boolean;
+  /* side jobs */
+  jobName: string;
+  jobTimer: number;
+  jobStreak: number;
+  jobEarned: number;
   /* multiplayer */
+  /** false when a downloaded asset failed to arrive and the game fell back to procedural */
+  assetsOk: boolean;
+  /** wire version, so two players can check they are on the same build */
+  netVersion: number;
   netStatus: 'offline' | 'connecting' | 'online' | 'error';
   netRoom: string;
+  /** The map the room settled on — not necessarily the one you picked. */
+  netMap: string;
   netError: string;
   netPeers: number;
   netNames: string[];
@@ -73,8 +92,11 @@ const initial: HudState = {
   clock: '00:00', hour: 11, fps: 0, triangles: 0, drawCalls: 0,
   aiming: false, hitMarker: 0, crosshairHot: false, busted: false, mapOpen: false,
   shopOpen: false, shopName: '', cheatMessage: null, cheatConsoleOpen: false,
-  mapName: '', drowning: 0,
-  netStatus: 'offline', netRoom: '', netError: '', netPeers: 0, netNames: [],
+  mapName: '', drowning: 0, weather: '', lightning: 0,
+  wantedFading: false, spotted: false,
+  jobName: '', jobTimer: 0, jobStreak: 0, jobEarned: 0,
+  assetsOk: true, netVersion: 0,
+  netStatus: 'offline', netRoom: '', netMap: '', netError: '', netPeers: 0, netNames: [],
   netTeam: 0, netHost: false, netMode: 0, netMatch: 0,
   netScoreA: 0, netScoreB: 0, netTarget: 0, netRoster: [], netFeed: [],
 };

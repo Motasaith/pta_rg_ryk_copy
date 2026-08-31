@@ -75,11 +75,21 @@ export class AssetBank {
     return this.models.get(id);
   }
 
+  /** How many downloaded assets are actually here, out of how many there should be. */
+  report(): { ok: boolean; text: string } {
+    const tex = Object.keys(TEX_REPEAT).length;
+    const mod = Object.keys(MODEL_FILES).length;
+    const ok = this.textures.size === tex && this.models.size === mod && !!this.env;
+    return {
+      ok,
+      text: `${this.textures.size}/${tex} textures · ${this.models.size}/${mod} models · `
+        + `HDRI ${this.env ? 'ok' : 'missing'}`,
+    };
+  }
+
   /** Debug aid for the title screen. */
   status(): string {
-    return `assets: ${this.textures.size}/${Object.keys(TEX_REPEAT).length} textures, `
-      + `${this.models.size}/${Object.keys(MODEL_FILES).length} models, `
-      + `hdri ${this.env ? 'ok' : 'MISSING'}`;
+    return `assets: ${this.report().text}`;
   }
 
   /**

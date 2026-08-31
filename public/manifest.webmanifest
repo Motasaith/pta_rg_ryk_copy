@@ -1,0 +1,10 @@
+{
+  "name": "PTA — Open World Pakistan",
+  "short_name": "PTA",
+  "description": "An open-world browser game set in Rahim Garden City. Drive, shoot, explore.",
+  "start_url": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#0b1116",
+  "theme_color": "#0b1116"
+}

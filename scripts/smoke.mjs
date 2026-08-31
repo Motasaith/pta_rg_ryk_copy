@@ -8,7 +8,7 @@
  *   npm test
  */
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const OUT = '.smoke-build';
@@ -16,9 +16,17 @@ const MODULES = [
   'mathx', 'settings', 'physics', 'assets', 'materials', 'sky', 'theme', 'maps', 'city', 'humanoid', 'characters',
   'weapons', 'vehicle', 'peds', 'traffic', 'combat', 'minimap', 'hudstore',
   'camerarig', 'audio', 'input', 'water', 'ao', 'layout', 'scheme', 'protocol', 'netclient',
+  'weather', 'police', 'jobs', 'device',
 ];
 
-rmSync(OUT, { recursive: true, force: true });
+// A file lock (antivirus, an editor, a stray node) can make the build directory
+// undeletable on Windows. Every file we need is rewritten below, so warn and carry on
+// rather than dying on a raw EPERM before a single test has run.
+try {
+  rmSync(OUT, { recursive: true, force: true });
+} catch {
+  console.warn(`could not clear ${OUT} (locked) - reusing it; stale files are overwritten`);
+}
 mkdirSync(OUT, { recursive: true });
 
 console.log('compiling game modules…');
@@ -44,8 +52,10 @@ for (const f of readdirSync(OUT).filter((f) => f.endsWith('.js'))) {
 }
 writeFileSync(join(OUT, 'package.json'), '{ "type": "module" }');
 
+// Written rather than copied: cpSync unlinks the destination first, which fails on a
+// locked-but-writable file. Overwriting in place works either way.
 for (const f of readdirSync('tests').filter((f) => f.endsWith('.mjs'))) {
-  cpSync(join('tests', f), join(OUT, f));
+  writeFileSync(join(OUT, f), readFileSync(join('tests', f)));
 }
 
 let failed = 0;

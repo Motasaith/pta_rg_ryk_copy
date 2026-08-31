@@ -185,6 +185,8 @@ export interface ConnectOpts {
   /** advertise the room in the public list so strangers can join */
   isPublic?: boolean;
   mode?: string;
+  /** which map we would like to play, as a roster index. Only the first client's counts. */
+  map?: number;
   /** override the server origin (tests) */
   origin?: string;
 }
@@ -219,6 +221,10 @@ export async function fetchOpenRooms(origin?: string): Promise<OpenRoom[]> {
 export class NetClient {
   status: NetStatus = 'offline';
   roomCode = '';
+  /** The map this room is playing, as a roster index. Valid from Welcome onwards. */
+  roomMap = 0;
+  /** What we asked for. Ignored by the server unless we were first through the door. */
+  private wantMap = 0;
   myId = 0;
   error = '';
   peers = new Map<number, RemotePeer>();
@@ -297,6 +303,7 @@ export class NetClient {
     this.disconnect();
     this.roomCode = code;
     this.name = name;
+    this.wantMap = opts.map ?? 0;
     this.status = 'connecting';
     this.error = '';
     this.notify();
@@ -309,7 +316,7 @@ export class NetClient {
       const ws = new WebSocket(url);
       ws.binaryType = 'arraybuffer';
       this.ws = ws;
-      ws.onopen = () => ws.send(encodeHello(this.name));
+      ws.onopen = () => ws.send(encodeHello(this.name, this.wantMap));
       ws.onmessage = (ev: MessageEvent) => this.onMessage(ev.data as ArrayBuffer);
       ws.onerror = () => this.fail('connection failed');
       ws.onclose = (ev: CloseEvent) => {
@@ -423,6 +430,9 @@ export class NetClient {
         this.myId = w.yourId;
         this.myTeam = w.yourTeam;
         this.hostId = w.hostId;
+        // The room's map is whatever the first person in chose. It is not a negotiation:
+        // two clients in different cities is not a game, it is two games.
+        this.roomMap = w.map;
         this.peers.clear();
         for (const p of w.peers) this.addPeer(p);
         this.status = 'online';

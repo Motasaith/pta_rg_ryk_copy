@@ -60,6 +60,20 @@ export function Hud({
         </div>
       )}
 
+      {/* side job */}
+      {hud.jobName && (
+        <div className="jobcard">
+          <b>{hud.jobName}</b>
+          <span className={hud.jobTimer <= 10 ? 'jobtime low' : 'jobtime'}>
+            {Math.floor(hud.jobTimer / 60)}:{String(hud.jobTimer % 60).padStart(2, '0')}
+          </span>
+          <i>
+            {hud.jobStreak > 0 && <em>x{hud.jobStreak}</em>}
+            Rs.{hud.jobEarned.toLocaleString()}
+          </i>
+        </div>
+      )}
+
       {/* objective + toast + cheat notification */}
       <div className="topcentre">
         {hud.cheatMessage && (
@@ -78,11 +92,12 @@ export function Hud({
           <span className="clock">{hud.clock}</span>
           <span className="hour">{String(hud.hour).padStart(2, '0')}:00</span>
         </div>
-        <div className="stars">
+        <div className={`stars${hud.wantedFading ? ' fading' : ''}`}>
           {[0, 1, 2, 3, 4].map((i) => (
             <span key={i} className={i < hud.wanted ? 'star lit' : 'star'}>★</span>
           ))}
         </div>
+        {hud.weather && <div className="weatherchip">{hud.weather}</div>}
         <div className="found">
           MOM&apos;S LIST <b>{hud.found}</b>/{hud.total}
         </div>
@@ -149,6 +164,11 @@ export function Hud({
 
       {hud.cheatConsoleOpen && (
         <CheatConsole hints={cheatHints} onSubmit={onCheat} onClose={onCloseCheat} />
+      )}
+
+      {hud.spotted && <div className="spotlit" />}
+      {hud.lightning > 0.01 && (
+        <div className="lightning" style={{ opacity: hud.lightning * hud.lightning * 0.55 }} />
       )}
 
       {hud.drowning > 0 && (

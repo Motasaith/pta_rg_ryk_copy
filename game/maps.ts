@@ -53,3 +53,19 @@ export const DEFAULT_MAP_ID = MAPS[0].id;
 export function mapById(id: string): GameMap {
   return MAPS.find((m) => m.id === id) ?? MAPS[0];
 }
+
+/**
+ * Roster index, for the network.
+ *
+ * A room agrees on its map as a single byte rather than a string, so the index has to be
+ * stable: **append new maps to THEMES, never reorder it**, or a client on the new build
+ * would put a joiner in the wrong city while both of them think they agree.
+ */
+export function mapIndex(id: string): number {
+  const i = MAPS.findIndex((m) => m.id === id);
+  return i < 0 ? 0 : i;
+}
+
+export function mapAt(i: number): GameMap {
+  return MAPS[i] ?? MAPS[0];
+}

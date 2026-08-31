@@ -7,11 +7,13 @@ import {
 } from './humanoid';
 import { createWeaponModel } from './weapons';
 
-export type PedState = 'walk' | 'idle' | 'flee' | 'chase' | 'dead';
+export type PedState = 'walk' | 'idle' | 'flee' | 'chase' | 'aggro' | 'dead';
 
 export interface Ped {
   h: Humanoid;
   cop: boolean;
+  /** A cop in body armour with a rifle: the 4-star tier. */
+  swat: boolean;
   x: number;
   y: number;
   z: number;
@@ -35,14 +37,25 @@ export interface Ped {
   aimPitch: number;
   idleT: number;
   bleed: number;
+  /** Road rage: how long this civilian keeps coming for you. */
+  aggroT: number;
+  /** Cooldown on their next swing, and on their next bit of shouting. */
+  swingCd: number;
+  chatterCd: number;
 }
 
 const WALK = 1.35;
 const RUN = 5.2;
 const COP_RUN = 5.8;
+/** An angry driver runs you down a bit slower than a panicking one runs away. */
+const AGGRO_RUN = 4.6;
 
 export class PedManager {
   peds: Ped[] = [];
+  /** Someone has shouted at the player. The engine turns this into a bark and a toast. */
+  onChatter: ((p: Ped, line: string) => void) | null = null;
+  /** An angry civilian has landed a punch. */
+  onSwing: ((p: Ped) => void) | null = null;
   private rng: Rng = mulberry32(1337);
   private streamT = 0;
 
@@ -52,8 +65,15 @@ export class PedManager {
     private city: City,
   ) {}
 
-  private look(cop: boolean): Look {
+  private look(cop: boolean, swat = false): Look {
     const r = this.rng;
+    if (swat) {
+      // black fatigues, plate carrier, helmet — one look, read instantly at a distance
+      return {
+        skin: pick(r, SKINS), shirt: 0x14171c, pants: 0x14171c,
+        hair: 0x0d0f13, shoes: 0x0b0d10, scale: 1.02 + r() * 0.03,
+      };
+    }
     if (cop) {
       return {
         skin: pick(r, SKINS), shirt: 0x1c2f52, pants: 0x22262e,
@@ -67,24 +87,25 @@ export class PedManager {
     };
   }
 
-  spawnPed(cop = false, atX?: number, atZ?: number): Ped {
+  spawnPed(cop = false, atX?: number, atZ?: number, swat = false): Ped {
     const loop = this.city.pedLoops[ri(this.rng, 0, this.city.pedLoops.length - 1)];
     const li = ri(this.rng, 0, loop.length - 1);
-    const h = createHumanoid(this.look(cop));
+    const h = createHumanoid(this.look(cop, swat));
     this.scene.add(h.root);
     if (cop) {
-      const w = createWeaponModel('pistol');
+      const w = createWeaponModel(swat ? 'ak47' : 'pistol');
       if (w) h.gunMount.add(w.group);
     }
     const ped: Ped = {
-      h, cop,
+      h, cop, swat,
       x: atX ?? loop[li].x, y: 0, z: atZ ?? loop[li].z,
       yaw: this.rng() * 6.28, speed: 0, radius: 0.32,
       state: cop ? 'chase' : 'walk',
-      health: cop ? 140 : 100,
+      health: swat ? 260 : cop ? 140 : 100,
       loop, li, dir: this.rng() > 0.5 ? 1 : -1,
       fleeT: 0, fleeFromX: 0, fleeFromZ: 0, flinch: 0, deadT: 0, corpseT: 0,
       shootCd: 1.2, aiming: false, aimPitch: 0, idleT: 0, bleed: 0,
+      aggroT: 0, swingCd: 0, chatterCd: 0,
     };
     this.peds.push(ped);
     return ped;
@@ -125,12 +146,71 @@ export class PedManager {
   /** Recycle a corpse somewhere out of sight but still in the neighbourhood. */
   private respawn(p: Ped, px: number, pz: number): void {
     this.relocate(p, px, pz, 55, 130);
-    p.health = p.cop ? 140 : 100;
+    p.health = p.swat ? 260 : p.cop ? 140 : 100;
     p.state = p.cop ? 'chase' : 'walk';
     p.deadT = 0; p.corpseT = 0; p.fleeT = 0; p.flinch = 0; p.bleed = 0;
+    p.aggroT = 0; p.swingCd = 0;
     p.speed = 0;
     p.h.tilt.rotation.set(0, 0, 0);
     p.h.root.visible = true;
+  }
+
+  /**
+   * Shove someone. Most people shout and get out of the way; some square up.
+   *
+   * `hostile` is the chance they turn on you rather than flee — the engine raises it for
+   * a driver whose car you have just rammed, which is the whole road-rage mechanic.
+   */
+  provoke(p: Ped, fromX: number, fromZ: number, hostile: number): void {
+    if (p.cop || p.state === 'dead') return;
+    if (p.chatterCd <= 0) {
+      p.chatterCd = 4 + this.rng() * 4;
+      const lines = this.rng() < hostile ? ANGRY_LINES : STARTLED_LINES;
+      this.onChatter?.(p, pick(this.rng, lines));
+    }
+    if (p.state === 'aggro') { p.aggroT = Math.max(p.aggroT, 10); return; }
+    if (this.rng() < hostile) {
+      p.state = 'aggro';
+      p.aggroT = 12 + this.rng() * 8;
+      p.swingCd = 0.5;
+    } else {
+      p.state = 'flee';
+      p.fleeT = Math.max(p.fleeT, 5);
+      p.fleeFromX = fromX;
+      p.fleeFromZ = fromZ;
+    }
+  }
+
+  /**
+   * Somebody gets out of the car you just rammed.
+   *
+   * Rather than spawning a driver — which would grow the crowd every time the player
+   * hits something — this borrows a pedestrian who is far enough away that nobody saw
+   * them leave, and walks them out of the car door. The population stays fixed.
+   */
+  summonDriver(x: number, z: number, px: number, pz: number): Ped | null {
+    for (const p of this.peds) {
+      if (p.cop || p.state === 'dead' || p.state === 'aggro') continue;
+      if (dist2(p.x, p.z, px, pz) < 85 * 85) continue;
+      p.x = x;
+      p.z = z;
+      p.speed = 0;
+      p.yaw = Math.atan2(px - x, pz - z);
+      p.h.root.position.set(x, p.y, z);
+      return p;
+    }
+    return null;
+  }
+
+  /** The nearest person who could plausibly be shouted at. */
+  nearestCivilian(x: number, z: number, maxDist: number): Ped | null {
+    let best: Ped | null = null, bd = maxDist * maxDist;
+    for (const p of this.peds) {
+      if (p.cop || p.state === 'dead') continue;
+      const d = dist2(p.x, p.z, x, z);
+      if (d < bd) { bd = d; best = p; }
+    }
+    return best;
   }
 
   panic(x: number, z: number, radius: number, seconds = 6): void {
@@ -200,6 +280,7 @@ export class PedManager {
     for (const p of this.peds) {
       p.flinch = Math.max(0, p.flinch - dt);
       p.bleed = Math.max(0, p.bleed - dt * 2);
+      p.chatterCd = Math.max(0, p.chatterCd - dt);
 
       if (p.state === 'dead') {
         p.deadT = Math.min(1, p.deadT + dt * 2.0);
@@ -230,6 +311,23 @@ export class PedManager {
             p.shootCd = 0.55 + this.rng() * 0.7;
             onCopShoot(p);
           }
+        }
+      } else if (p.state === 'aggro') {
+        // Road rage: come at the player and swing. Reuses the same steer-and-move code
+        // as everyone else, so an angry driver costs no more than a walking one.
+        p.aggroT -= dt;
+        const d = Math.hypot(px - p.x, pz - p.z);
+        tx = px; tz = pz;
+        want = d > 1.7 ? AGGRO_RUN : 0;
+        p.swingCd -= dt;
+        if (d < 2.1 && p.swingCd <= 0) {
+          p.swingCd = 1.15;
+          p.flinch = 0.22;
+          this.onSwing?.(p);
+        }
+        if (p.aggroT <= 0 || d > 34) {
+          p.state = 'walk';
+          p.li = ri(this.rng, 0, p.loop.length - 1);
         }
       } else if (p.state === 'flee') {
         p.fleeT -= dt;
@@ -310,6 +408,24 @@ function basePose(dt: number, t: number, speed: number, p: Ped, aiming: boolean)
     punch: 0, flinch: p.flinch, steer: 0,
   };
 }
+
+/* Barks. Text, not voice acting: a line on the HUD plus a two-syllable synth blip reads
+   as someone shouting, and costs a string and three oscillators instead of an audio pack. */
+const STARTLED_LINES = [
+  'Hey, watch the road!',
+  'Oye! Dekh ke chalo!',
+  'Are you crazy?!',
+  'Watch where you are going!',
+  'Bhai, kya kar rahe ho?',
+  'Careful, yaar!',
+];
+const ANGRY_LINES = [
+  'You hit my car!',
+  'Come here, I will show you!',
+  'That is coming out of your pocket!',
+  'Oye! Ab tu gaya!',
+  'You think this is a joke?',
+];
 
 export { WALK as PED_WALK, RUN as PED_RUN };
 export function pedYawTo(p: Ped, x: number, z: number): number {

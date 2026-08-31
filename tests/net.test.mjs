@@ -14,11 +14,12 @@ const near = (a, b, tol) => Math.abs(a - b) <= tol;
 console.log(`
 protocol round trips`);
 {
-  const hello = P.decodeHello(P.encodeHello('Saith'));
+  const hello = P.decodeHello(P.encodeHello('Saith', 2));
   ok(hello && hello.name === 'Saith' && hello.version === P.PROTOCOL_VERSION, 'hello survives a round trip');
+  ok(hello.map === 2, 'hello carries the map we want to play');
 
   const long = 'x'.repeat(200);
-  ok(P.decodeHello(P.encodeHello(long)).name.length === 24, 'an over-long name is truncated on the wire');
+  ok(P.decodeHello(P.encodeHello(long, 0)).name.length === 24, 'an over-long name is truncated on the wire');
 
   const st = {
     x: -123.456, y: 12.34, z: 501.02, yaw: 2.1, flags: P.F_SPRINT | P.F_GROUNDED,
@@ -46,11 +47,13 @@ protocol round trips`);
   ok(snap && snap.tick === 99 && snap.states.length === 2, 'snapshot carries tick and every player');
   ok(snap.states[0].id === 3 && snap.states[1].id === 5, 'player ids are preserved');
 
-  const w = P.decodeWelcome(P.encodeWelcome(4, P.TEAM_B, 1, [
+  const w = P.decodeWelcome(P.encodeWelcome(4, P.TEAM_B, 1, 3, [
     { id: 1, name: 'Abdul', team: P.TEAM_A }, { id: 2, name: 'Bina', team: P.TEAM_B },
   ]));
   ok(w && w.yourId === 4 && w.peers.length === 2 && w.peers[1].name === 'Bina', 'welcome lists the existing peers');
   ok(w.yourTeam === P.TEAM_B && w.hostId === 1, 'welcome carries our team and the traffic host');
+  // The one that matters: two players in different cities is not a game, it is two games.
+  ok(w.map === 3, 'welcome tells a joiner which map the room is playing');
   ok(w.peers[0].team === P.TEAM_A && w.peers[1].team === P.TEAM_B, 'welcome carries each peer team');
   const j = P.decodeJoin(P.encodeJoin({ id: 6, name: 'Rauf', team: P.TEAM_A }));
   ok(j.name === 'Rauf' && j.team === P.TEAM_A, 'join round trip carries the team');
@@ -89,7 +92,7 @@ malformed frames must not throw`);
     new ArrayBuffer(0), new ArrayBuffer(1), new ArrayBuffer(3),
     P.encodeState(1, { x: 0, y: 0, z: 0, yaw: 0, flags: 0, speed: 0, weapon: 0 }).slice(0, 5),
     P.encodeSnapshot(1, [{ id: 1, x: 0, y: 0, z: 0, yaw: 0, flags: 0, speed: 0, weapon: 0 }]).slice(0, 8),
-    P.encodeWelcome(1, 0, 0, [{ id: 2, name: 'truncated', team: 0 }]).slice(0, 8),
+    P.encodeWelcome(1, 0, 0, 0, [{ id: 2, name: 'truncated', team: 0 }]).slice(0, 8),
   ];
   let threw = false;
   for (const buf of cases) {
@@ -271,6 +274,48 @@ traffic interpolation`);
   const g = new TrafficBuffer();
   for (let i = 0; i < 300; i++) g.push(frame(i), 5000 + i * 100);
   ok(g.length <= 20, `the traffic buffer stays bounded (${g.length} frames after 300 pushes)`);
+}
+
+/* -- the room agrees on one map ------------------------------------------- */
+console.log('\nroom map handshake');
+{
+  const { NetClient } = await import('./netclient.js');
+  const { mapIndex, mapAt, MAPS } = await import('./maps.js');
+
+  // A stand-in socket, so the real NetClient can be driven without a server.
+  const sent = [];
+  let sock = null;
+  class FakeSocket {
+    constructor(url) { this.url = url; sock = this; }
+    set binaryType(_v) { }
+    send(buf) { sent.push(buf); }
+    close() { }
+  }
+  const prev = globalThis.WebSocket;
+  globalThis.WebSocket = FakeSocket;
+
+  const net = new NetClient();
+  net.connect('ABCDE', 'Saith', { origin: 'http://x', map: mapIndex('metro') });
+  sock.onopen();
+  const hello = P.decodeHello(sent[0]);
+  ok(hello && hello.map === mapIndex('metro'),
+    `the map we picked goes out in the very first frame (index ${hello?.map})`);
+
+  // The server says the room is already playing something else. We do as we are told.
+  sock.onmessage({ data: P.encodeWelcome(2, 0, 1, mapIndex('thal'), []) });
+  ok(net.status === 'online', 'the welcome puts us online');
+  ok(net.roomMap === mapIndex('thal'),
+    `a joiner adopts the room's map, not their own (${mapAt(net.roomMap).name})`);
+  ok(mapAt(net.roomMap).id !== 'metro', 'and it really is not the one they asked for');
+
+  globalThis.WebSocket = prev;
+
+  // The index is what goes on the wire, so the roster order is load-bearing.
+  ok(MAPS.every((m, i) => mapIndex(m.id) === i), 'every map round-trips through its index');
+  ok(mapAt(250).id === MAPS[0].id, 'a nonsense index falls back rather than crashing');
+  ok(P.PROTOCOL_VERSION >= 3,
+    `the wire version was bumped for map selection (v${P.PROTOCOL_VERSION}), so a build `
+    + 'without maps is rejected instead of silently joining a different city');
 }
 
 console.log(`

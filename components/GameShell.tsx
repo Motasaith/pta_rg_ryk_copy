@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import { Game } from '@/game/engine';
 import { getHud, resetHud, subscribeHud } from '@/game/hudstore';
 import { DEFAULT_MAP_ID, MAPS } from '@/game/maps';
+import { enterLandscape, isPortrait, isTouchDevice } from '@/game/device';
+import { TouchControls } from './TouchControls';
 import { loadSettings, saveSettings, Settings } from '@/game/settings';
 import { Hud } from './Hud';
 import { Loader, MapOverlay, PauseMenu, Title, Wasted, Won } from './Menus';
@@ -18,8 +20,28 @@ export default function GameShell() {
   const [showSettings, setShowSettings] = useState(false);
   const [menuTab, setMenuTab] = useState<'display' | 'online'>('display');
   const [mapId, setMapId] = useState(DEFAULT_MAP_ID);
+  const [touch, setTouch] = useState(false);
+  const [portrait, setPortrait] = useState(false);
+  /** true when *we* paused for the rotate gate, so we know to un-pause for them */
+  const rotatePaused = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const hud = useSyncExternalStore(subscribeHud, getHud, getHud);
+
+  // Touch device? Then the on-screen pad replaces the mouse and keyboard, and the
+  // orientation has to be watched for the rest of the session.
+  useEffect(() => {
+    const coarse = isTouchDevice();
+    setTouch(coarse);
+    if (!coarse) return;
+    const onOrient = () => setPortrait(isPortrait());
+    onOrient();
+    addEventListener('resize', onOrient);
+    addEventListener('orientationchange', onOrient);
+    return () => {
+      removeEventListener('resize', onOrient);
+      removeEventListener('orientationchange', onOrient);
+    };
+  }, []);
 
   // boot the engine exactly once
   useEffect(() => {
@@ -49,6 +71,20 @@ export default function GameShell() {
     };
   }, []);
 
+  // Turning the phone upright pauses the game rather than leaving the player being shot
+  // at behind a full-screen notice, and turning it back resumes exactly where they were.
+  useEffect(() => {
+    const g = gameRef.current;
+    if (!touch || !g) return;
+    if (portrait && hud.phase === 'playing') {
+      rotatePaused.current = true;
+      g.setPaused(true);
+    } else if (!portrait && rotatePaused.current) {
+      rotatePaused.current = false;
+      g.setPaused(false);
+    }
+  }, [touch, portrait, hud.phase]);
+
   // keep the canvas refs in sync once the HUD mounts them
   useEffect(() => {
     if (gameRef.current) {
@@ -65,8 +101,11 @@ export default function GameShell() {
   }, []);
 
   const start = useCallback(() => {
+    // Fullscreen + orientation lock must go first, straight off the tap: both need the
+    // user gesture, and awaiting the world build would have spent it.
+    if (touch) void enterLandscape(document.documentElement);
     void gameRef.current?.start(mapId);
-  }, [mapId]);
+  }, [mapId, touch]);
 
   const resume = useCallback(() => {
     setShowSettings(false);
@@ -98,13 +137,14 @@ export default function GameShell() {
   }, [hud.phase, hud.mapOpen, hud.shopOpen, hud.cheatConsoleOpen, showSettings, resume]);
 
   return (
-    <div className="stage">
+    <div className={`stage${touch ? ' touchmode' : ''}`}>
       <canvas
         ref={canvasRef}
         className="viewport"
         onClick={() => {
           // clicking the world re-captures the mouse after Esc released it
-          if (hud.phase === 'playing' && !hud.shopOpen && !hud.cheatConsoleOpen) {
+          // Touch has no pointer to lock, and asking for one swallows the tap.
+          if (!touch && hud.phase === 'playing' && !hud.shopOpen && !hud.cheatConsoleOpen) {
             gameRef.current?.getInput().requestLock();
           }
         }}
@@ -117,6 +157,30 @@ export default function GameShell() {
         onCheat={(code) => gameRef.current?.submitCheat(code)}
         onCloseCheat={() => gameRef.current?.toggleConsole(false)}
       />
+
+      {touch && (
+        <TouchControls
+          hud={hud}
+          input={gameRef.current?.getInput() ?? null}
+          onPause={() => gameRef.current?.setPaused(true)}
+          onMap={() => gameRef.current?.toggleMap()}
+          onCheats={() => gameRef.current?.toggleConsole()}
+        />
+      )}
+
+      {touch && portrait && hud.phase !== 'title' && hud.phase !== 'loading' && (
+        <div className="rotategate">
+          <div className="rotateicon">▭</div>
+          <h2>ROTATE YOUR DEVICE</h2>
+          <p>
+            PTA is built for landscape. Turn your phone sideways to play.
+          </p>
+          <small>
+            If nothing happens, check that rotation lock is off in your Control Centre or
+            quick settings.
+          </small>
+        </div>
+      )}
 
       {hud.mapOpen && <MapOverlay mapRef={mapRef} onClose={() => gameRef.current?.toggleMap(false)} />}
 
@@ -136,13 +200,22 @@ export default function GameShell() {
 
       {hud.phase === 'loading' && !error && <Loader pct={hud.loadPct} msg={hud.loadMsg} />}
 
-      {hud.phase === 'title' && hud.loadMsg && <div className="loadnote">{hud.loadMsg}</div>}
+      {hud.phase === 'title' && hud.loadMsg && (
+        <div className={`buildnote${hud.assetsOk ? '' : ' warn'}`}>
+          {hud.assetsOk ? '●' : '⚠'} {hud.loadMsg}
+          {hud.netVersion > 0 && <span> · net v{hud.netVersion}</span>}
+          {!hud.assetsOk && (
+            <span> — some downloads failed, so this machine is using the fallback
+              textures. Everyone in a room must be on the same build.</span>
+          )}
+        </div>
+      )}
 
       {hud.phase === 'title' && !showSettings && (
         <Title
           maps={MAPS}
           mapId={mapId}
-          onPickMap={setMapId}
+          onPickMap={(id) => { setMapId(id); gameRef.current?.setMap(id); }}
           onStart={start}
           onOnline={() => { setMenuTab('online'); setShowSettings(true); }}
           onSettings={() => { setMenuTab('display'); setShowSettings(true); }}
@@ -170,6 +243,7 @@ export default function GameShell() {
           net={{
             status: hud.netStatus,
             room: hud.netRoom,
+            map: hud.netMap,
             error: hud.netError,
             peers: hud.netPeers,
             names: hud.netNames,

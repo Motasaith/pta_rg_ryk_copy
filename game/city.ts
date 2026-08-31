@@ -16,7 +16,7 @@ import { AoGrid } from './ao';
 
 /* The geometry batcher, street furniture and shared types live in layout.ts. They are
    re-exported here so the rest of the game can keep importing "the map" from one place. */
-export type { City, MinimapData, Poi, RoadNode, Shop, WaterZone } from './layout';
+export type { City, Garage, MinimapData, Poi, RoadNode, Shop, WaterZone } from './layout';
 export { LANE_OFF, LEFT_HAND_TRAFFIC, LOT_Y, PAINT_Y, ROAD_Y, WALK_Y } from './layout';
 export type { BlockType, Theme } from './theme';
 export { DEFAULT_THEME, THEMES, themeById } from './theme';
@@ -210,6 +210,7 @@ export function buildCity(
 
   return {
     root, nodes, pedLoops: C.pedLoops, parkSpots: C.parkSpots, roadSpawns, shops: C.shops,
+    garages: C.garages,
     pois, minimap, itemSpots: C.itemSpots, pickupSpots: C.pickupSpots, playerStart,
     policeStation, hospital, lampGlow, bounds, waterZones: C.waterZones,
     mapId: theme.id, mapName: theme.name,
@@ -392,7 +393,10 @@ function district(
           break;
         }
         case 'police': police = policeBlock(B, phys, mats, cx, cz2, minimap, pois, signMeshes, C.parkSpots); break;
-        case 'parking': parking(B, phys, mats, rng, cx, cz2, minimap, C.parkSpots, pickupSpots); break;
+        case 'parking':
+          parking(B, phys, mats, rng, cx, cz2, minimap, C.parkSpots, pickupSpots);
+          paynspray(B, phys, mats, cx, cz2, C);
+          break;
       }
     }
   }
@@ -1064,6 +1068,50 @@ function policeBlock(
   for (let i = 0; i < 4; i++) parkSpots.push({ x: cx - 12 + i * 8, z: cz - 12, yaw: Math.PI });
   pois.push({ name: 'POLICE', x: cx, z: cz + 12 - d / 2 - 4, kind: 'police' });
   return { x: cx, z: cz - 4 };
+}
+
+/**
+ * A Pay 'n' Spray bay on the corner of a car park.
+ *
+ * Three walls and a roof with the front left open, so the "door" is a hole you drive
+ * into rather than an animated shutter — the trigger is the engine noticing your car is
+ * inside the box, which needs no state, no animation and no collider changes.
+ */
+function paynspray(B: Builder, phys: Physics, mats: Mats, cx: number, cz: number, C: Collect): void {
+  const gx = cx + HALF_CORE - 11;
+  const gz = cz + HALF_CORE - 8;
+  const W = 11, D = 13, H = 4.6;
+
+  // forecourt apron, so the bay reads as somewhere you are meant to drive
+  B.quad(mats.concrete, gx, LOT_Y + 0.008, gz - D / 2 - 3.5, W + 3, 7, 3);
+
+  // three walls: back (+Z) and both sides. The -Z face is the open bay.
+  B.box(mats.plaster[1], gx, LOT_Y + H / 2, gz + D / 2, W, H, 0.5, 0, 4);
+  phys.addCentered(gx, gz + D / 2, W / 2, 0.25, 0, LOT_Y + H, KIND.Building);
+  for (const sx of [-1, 1]) {
+    B.box(mats.plaster[1], gx + sx * (W / 2), LOT_Y + H / 2, gz, 0.5, H, D, 0, 4);
+    phys.addCentered(gx + sx * (W / 2), gz, 0.25, D / 2, 0, LOT_Y + H, KIND.Building);
+  }
+  // roof and lintel — a collider would be a ceiling nothing can reach, so it is visual only
+  B.box(mats.concrete, gx, LOT_Y + H + 0.3, gz, W + 1.2, 0.6, D + 1.2, 0, 3);
+  B.box(mats.metal, gx, LOT_Y + H - 0.55, gz - D / 2, W - 0.4, 1.1, 0.4, 0, 3);
+  // painted bay markings on the floor
+  B.quad(mats.paint, gx, LOT_Y + 0.02, gz, 0.18, D - 1, 0);
+  for (const sx of [-1, 1]) B.quad(mats.paint, gx + sx * 3.4, LOT_Y + 0.02, gz, 0.18, D - 1, 0);
+
+  const sign = new THREE.Mesh(
+    new THREE.PlaneGeometry(10, 1.9),
+    new THREE.MeshBasicMaterial({
+      map: signTexture("PAY 'N' SPRAY", '#8a1f2e', '#ffe9a8', 640, 110), side: THREE.DoubleSide,
+    }),
+  );
+  sign.position.set(gx, LOT_Y + H + 1.1, gz - D / 2 - 0.7);
+  sign.rotation.y = Math.PI;
+  C.signs.push(sign);
+
+  C.garages.push({ x: gx, z: gz + 1.5, yaw: 0, name: "PAY 'N' SPRAY" });
+  C.pois.push({ name: "PAY 'N' SPRAY", x: gx, z: gz - D / 2 - 4, kind: 'shop' });
+  C.minimap.buildings.push({ x: gx, z: gz, w: W, d: D });
 }
 
 function parking(
