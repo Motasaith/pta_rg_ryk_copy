@@ -959,8 +959,12 @@ input[type="range"]::-moz-range-thumb {
 }
 .touch button { -webkit-tap-highlight-color: transparent; touch-action: none; }
 
-/* the two thumb zones. Invisible: a painted box would only tell you where NOT
-   to put your thumb, and the stick already appears wherever you land. */
+/* the two thumb zones. The stick zone is invisible: a painted box would only tell
+   you where NOT to put your thumb, and the stick already appears wherever you land.
+   The look layer is the WHOLE screen — buttons sit on top of it, and a drag that
+   starts on a button is handed down to look once it passes the tap slop. Without
+   that, the right thumb could only look where there was no button, which on a
+   phone is nowhere. */
 .tstickzone {
   position: absolute;
   left: 0; bottom: 0;
@@ -969,8 +973,7 @@ input[type="range"]::-moz-range-thumb {
 }
 .tlook {
   position: absolute;
-  right: 0; top: 0;
-  width: 56%; height: 100%;
+  inset: 0;
   pointer-events: auto;
 }
 
@@ -993,18 +996,12 @@ input[type="range"]::-moz-range-thumb {
   box-shadow: 0 0 18px rgba(125, 243, 255, 0.35);
 }
 
-.tbtns {
-  position: absolute;
-  right: calc(12px + env(safe-area-inset-right));
-  bottom: calc(12px + env(safe-area-inset-bottom));
-  width: 216px;
-  display: flex;
-  flex-direction: row-reverse;
-  flex-wrap: wrap-reverse;
-  gap: 9px;
-  pointer-events: auto;
-}
+/* Action buttons. Each is absolutely positioned at a saved viewport fraction (see
+   TouchControls.tsx), so the player can drag them anywhere in EDIT mode — PUBG-style.
+   translate(-50%, -50%) centres the button on that fraction. */
 .tbtn {
+  position: absolute;
+  transform: translate(-50%, -50%);
   width: 62px; height: 62px;
   border-radius: 50%;
   border: 1.5px solid rgba(255, 255, 255, 0.26);
@@ -1016,8 +1013,9 @@ input[type="range"]::-moz-range-thumb {
   font-weight: 800;
   letter-spacing: 0.08em;
   cursor: pointer;
+  pointer-events: auto;
 }
-.tbtn:active { background: rgba(125, 243, 255, 0.28); transform: scale(0.94); }
+.tbtn:active { background: rgba(125, 243, 255, 0.28); transform: translate(-50%, -50%) scale(0.94); }
 .tbtn.fire {
   width: 86px; height: 86px;
   font-size: 12px;
@@ -1086,6 +1084,59 @@ input[type="range"]::-moz-range-thumb {
   text-align: left;
 }
 .tguns button.on { background: rgba(125, 243, 255, 0.16); color: var(--cyan); }
+
+/* ── layout editor ──────────────────────────────────────────────────────────
+   While editing, buttons pulse so it is obvious they are drag handles, and the
+   banner at the top carries SAVE / RESET / CANCEL. The game keeps rendering
+   underneath — the world does not freeze for a layout tweak. */
+.touch.editing .tbtn {
+  border-color: rgba(125, 243, 255, 0.85);
+  box-shadow: 0 0 14px rgba(125, 243, 255, 0.35);
+  animation: teditPulse 1.1s ease-in-out infinite;
+}
+@keyframes teditPulse {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.45); }
+}
+.teditbar {
+  position: absolute;
+  top: calc(48px + env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(8, 13, 18, 0.94);
+  pointer-events: auto;
+  white-space: nowrap;
+}
+.teditbar span {
+  font-family: var(--sans);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  color: var(--amber);
+}
+.teditbar button {
+  min-width: 52px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+}
+.teditbar button:first-of-type {
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
 
 /* ── rotate gate ─────────────────────────────────────────────────────────────
    Not a nicety: iOS Safari has no Screen Orientation lock at all, so on an

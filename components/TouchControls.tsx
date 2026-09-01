@@ -5,6 +5,9 @@ import { Action } from '@/game/settings';
 import { Input } from '@/game/input';
 import { HudState } from '@/game/hudstore';
 import { WEAPONS, WEAPON_ORDER } from '@/game/weapons';
+import {
+  DEFAULT_LAYOUT, loadLayout, saveLayout, TouchLayout,
+} from '@/game/touchlayout';
 
 /**
  * The on-screen pad.
@@ -14,7 +17,7 @@ import { WEAPONS, WEAPON_ORDER } from '@/game/weapons';
  * all run the identical code paths they do on a desktop. The engine never learns that it
  * is being played with thumbs.
  *
- * Two deliberate choices, both borrowed from how console-to-mobile ports actually work:
+ * Three deliberate choices, all borrowed from how console-to-mobile ports actually work:
  *
  *  · **The stick floats.** Its centre is wherever your thumb first lands inside the
  *    bottom-left zone, not a painted circle you have to find. On a phone you cannot see
@@ -22,12 +25,24 @@ import { WEAPONS, WEAPON_ORDER } from '@/game/weapons';
  *  · **Sprint is automatic** past 85% deflection, and there is no separate sprint button.
  *    A button you have to hold with the same thumb that is steering is a button nobody
  *    presses.
+ *  · **Look is the whole screen.** The look layer sits *under* the buttons, and a drag
+ *    that starts on a button is re-routed to look once it moves further than a tap
+ *    threshold. That is how every mobile shooter works: the FIRE button is also a look
+ *    surface, so you can swipe to track a target without lifting the thumb that fires.
+ *    Without it, running (left thumb) + looking (right thumb) dies the moment the right
+ *    thumb lands on a button — which is most of the right half of the screen.
+ *
+ * The layout is customisable, PUBG-style: tap EDIT in the utility row, drag any button
+ * anywhere, tap SAVE. Positions persist as viewport fractions, so a layout saved on one
+ * phone survives a different screen size.
  */
 
 /** How much camera rotation one CSS pixel of drag is worth. */
-const LOOK_SCALE = 1.35;
+const LOOK_SCALE = 2.1;
 /** Radius of full stick deflection, in CSS pixels. */
 const STICK_R = 52;
+/** A drag must move this many CSS pixels before it counts as look, not a tap. */
+const TAP_SLOP = 9;
 
 interface Btn {
   a: Action | null;
@@ -70,6 +85,8 @@ export function TouchControls({
 }) {
   const [stick, setStick] = useState<{ x: number; y: number; ox: number; oy: number } | null>(null);
   const [guns, setGuns] = useState(false);
+  const [layout, setLayout] = useState<TouchLayout>(() => loadLayout());
+  const [editing, setEditing] = useState(false);
   const stickId = useRef<number | null>(null);
   const lookId = useRef<number | null>(null);
   const lookAt = useRef({ x: 0, y: 0 });
@@ -84,6 +101,8 @@ export function TouchControls({
     if (hud.phase !== 'playing') {
       input?.clearVirtual();
       setStick(null);
+      setGuns(false);
+      setEditing(false);
       stickId.current = null;
       lookId.current = null;
     }
@@ -171,23 +190,76 @@ export function TouchControls({
   }, [input]);
 
   /**
-   * Hold a button. The release is tracked on `window`, not on the button, so sliding a
-   * thumb off the edge of FIRE stops firing instead of leaving the trigger jammed down.
+   * Hold a button — and let a drag that grows beyond the tap slop become a look.
+   *
+   * The release is tracked on `window`, not on the button, so sliding a thumb off the
+   * edge of FIRE stops firing instead of leaving the trigger jammed down.
+   *
+   * The look hand-off is what makes "run and look" work: the right thumb starts on FIRE
+   * (the biggest target on the screen), swipes to track, and the camera follows — the
+   * button releases the moment the drag takes over. A tap that never leaves the slop
+   * radius stays a tap, so quick single shots still fire.
    */
   const holdDown = useCallback((b: Btn, e: React.PointerEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    if (editing) return;                       // in edit mode buttons are drag handles
     press(b, true);
     if (b.tap) return;
-    drag(e.pointerId, () => {}, () => press(b, false));
-  }, [press, drag]);
+    const sx = e.clientX, sy = e.clientY;
+    let handedOff = false;
+    drag(e.pointerId, (ev) => {
+      if (handedOff) return;
+      if (Math.hypot(ev.clientX - sx, ev.clientY - sy) > TAP_SLOP) {
+        handedOff = true;
+        press(b, false);                      // the drag owns this finger now
+        if (input && lookId.current === null) {
+          lookId.current = ev.pointerId;
+          lookAt.current = { x: ev.clientX, y: ev.clientY };
+        }
+      }
+    }, () => {
+      if (!handedOff) press(b, false);
+      if (handedOff && lookId.current === e.pointerId) lookId.current = null;
+    });
+  }, [press, drag, editing, input]);
+
+  /* ── layout editor ────────────────────────────────────────────────────────
+     PUBG-style: while editing, every button is a drag handle. Positions are stored
+     as viewport fractions so they survive rotation and different screens. */
+  const editDown = useCallback((label: string, e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const id = e.pointerId;
+    drag(id, (ev) => {
+      setLayout((l) => ({
+        ...l,
+        [label]: {
+          x: Math.min(0.97, Math.max(0.03, ev.clientX / innerWidth)),
+          y: Math.min(0.97, Math.max(0.03, ev.clientY / innerHeight)),
+        },
+      }));
+    }, () => {});
+  }, [drag]);
+
+  const btnDown = useCallback((b: Btn, e: React.PointerEvent) => {
+    if (editing) editDown(b.label, e);
+    else holdDown(b, e);
+  }, [editing, editDown, holdDown]);
+
+  const finishEditing = useCallback((save: boolean) => {
+    setEditing(false);
+    if (save) saveLayout(layout);
+    else setLayout(loadLayout());
+  }, [layout]);
 
   if (hud.phase !== 'playing') return null;
   const set = hud.inVehicle ? DRIVING : ON_FOOT;
 
   return (
-    <div className="touch">
-      {/* look: everything on the right that is not a button */}
+    <div className={`touch${editing ? ' editing' : ''}`}>
+      {/* look: the whole screen, *under* the buttons. A swipe that starts on a
+          button is handed to look once it passes the tap slop (see holdDown). */}
       <div className="tlook" onPointerDown={lookDown} />
 
       {/* movement */}
@@ -214,10 +286,28 @@ export function TouchControls({
             {WEAPONS[hud.weapon].name.split(' ')[0].slice(0, 5)}
           </button>
         )}
+        <button
+          type="button"
+          className={editing ? 'on' : ''}
+          onPointerDown={() => setEditing((v) => !v)}
+          aria-label="Edit layout"
+        >
+          EDIT
+        </button>
       </div>
 
+      {/* edit-mode banner: the game keeps running, but taps are all layout moves */}
+      {editing && (
+        <div className="teditbar">
+          <span>DRAG BUTTONS TO MOVE THEM</span>
+          <button type="button" onPointerDown={() => finishEditing(true)}>SAVE</button>
+          <button type="button" onPointerDown={() => setLayout(structuredClone(DEFAULT_LAYOUT))}>RESET</button>
+          <button type="button" onPointerDown={() => finishEditing(false)}>CANCEL</button>
+        </div>
+      )}
+
       {/* weapon wheel, opened from the utility row so it is never in the way */}
-      {guns && !hud.inVehicle && (
+      {guns && !hud.inVehicle && !editing && (
         <div className="tguns">
           {WEAPON_ORDER.map((w) => (
             <button
@@ -236,20 +326,23 @@ export function TouchControls({
         </div>
       )}
 
-      {/* actions */}
-      <div className="tbtns">
-        {set.map((b) => (
+      {/* actions — absolutely positioned from the saved layout, so each one can
+          live anywhere the player wants it. */}
+      {set.map((b) => {
+        const p = layout[b.label] ?? DEFAULT_LAYOUT[b.label] ?? { x: 0.8, y: 0.8 };
+        return (
           <button
             key={b.label}
             type="button"
             className={`tbtn ${b.kind ?? 'plain'}`}
-            onPointerDown={(e) => holdDown(b, e)}
+            style={{ left: `${p.x * 100}%`, top: `${p.y * 100}%` }}
+            onPointerDown={(e) => btnDown(b, e)}
             onContextMenu={(e) => e.preventDefault()}
           >
             {b.label}
           </button>
-        ))}
-      </div>
+        );
+      })}
     </div>
   );
 }
