@@ -957,7 +957,24 @@ input[type="range"]::-moz-range-thumb {
   user-select: none;
   -webkit-tap-highlight-color: transparent;
 }
-.touch button { -webkit-tap-highlight-color: transparent; touch-action: none; }
+/*
+ * touch-action must be on EVERY element that can receive a touch, not just the root.
+ *
+ * It is not an inherited property: `.touch { touch-action: none }` computes to `auto` on
+ * .tlook and .tstickzone, and Chrome then treats a look-drag as a possible page scroll —
+ * it swallows the movement while it decides, which feels like the camera is stuck in
+ * treacle, and it fires pointercancel when it guesses wrong. Opera's gesture heuristics
+ * are looser, which is why this only ever showed up in Chrome.
+ */
+.touch, .touch * { touch-action: none; }
+.touch button { -webkit-tap-highlight-color: transparent; }
+/* The canvas underneath is a touch target too, and so is the document: without these a
+   drag that starts on a gap between buttons can still pull the address bar, trigger
+   pull-to-refresh, or double-tap-zoom the page mid-firefight. */
+.touchmode, .touchmode .viewport { touch-action: none; }
+@media (pointer: coarse) {
+  html, body { touch-action: none; }
+}
 
 /* the two thumb zones. The stick zone is invisible: a painted box would only tell
    you where NOT to put your thumb, and the stick already appears wherever you land.

@@ -164,6 +164,17 @@ a desktop. Two details worth knowing:
   nitrous — it has its own button.
 - Drags and button holds are tracked on `window`, not with `setPointerCapture`, which
   throws `InvalidStateError` on touch often enough to jam a trigger down.
+- **Touch is read from TouchEvents, not PointerEvents.** Chrome on Android delivers a
+  touch to a pointer listener with `clientX`/`clientY` of **zero** while the TouchEvent
+  for the same tap carries the real coordinates - so a pointer-based pad drew its stick
+  at the top-left corner of the screen and walking did nothing. Opera Mobile does not do
+  it, which is why this only ever showed up in Chrome. `game/touchinput.ts` normalises
+  both families and is unit-tested against exactly that case.
+- **`touch-action: none` is set on every element that can receive a touch**, not just the
+  root. It is not an inherited property: with it only on the container, `.tlook` and
+  `.tstickzone` computed to `auto`, and Chrome treated every look-drag as a possible page
+  scroll - swallowing the movement while it decided, which felt like the camera was stuck
+  in treacle.
 
 The HUD rearranges itself around two thumbs: the radar moves to the top-left because the
 stick lives bottom-left, the weapon panel moves to the bottom-centre because the buttons
@@ -326,6 +337,8 @@ game/
   police.ts         roadblocks, spike strips and the pooled search helicopter
   jobs.ts           taxi / vigilante / paramedic shifts on one shared state machine
   device.ts         touch detection, fullscreen and the landscape lock (and why it fails)
+  touchinput.ts     one finger, from either TouchEvents or PointerEvents (see the note above)
+  touchlayout.ts    the drag-your-buttons-anywhere layout, saved as viewport fractions
   input.ts          keyboard + mouse + the virtual/analog layer the on-screen pad writes
   maps.ts           the map roster; builds only the one the player picked
   city.ts           the grid districts, the canal and its bridges — driven by a theme

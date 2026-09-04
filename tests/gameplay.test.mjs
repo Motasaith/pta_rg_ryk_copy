@@ -660,5 +660,42 @@ console.log('\ntouch controls');
     'clearVirtual lets go of everything at once');
 }
 
+/* -- one finger, two families of events ----------------------------------- */
+console.log('\ntouch vs pointer events');
+{
+  const T = await import('./touchinput.js');
+
+  // The bug this module exists for: Chrome on Android delivers a touch to a PointerEvent
+  // listener with clientX/clientY of ZERO, while the TouchEvent for the same tap has the
+  // real coordinates. A pad that trusted the pointer event drew its stick at the top-left
+  // corner of the screen and the player could not walk.
+  const chromeTouchAsPointer = { pointerId: 3, pointerType: 'touch', clientX: 0, clientY: 0 };
+  const chromeTouchAsTouch = { changedTouches: [{ identifier: 0, clientX: 150, clientY: 300 }] };
+  ok(T.fromPointer(chromeTouchAsPointer).x === 0,
+    'a touch seen as a PointerEvent really does report x=0 (this is the bug)');
+  const g = T.fromTouch(chromeTouchAsTouch);
+  ok(g.x === 150 && g.y === 300,
+    `the TouchEvent for the same tap carries the truth (${g.x}, ${g.y})`);
+  ok(g.kind === 'touch' && g.id === 0, 'and the touch identifier, which starts at 0');
+
+  // A mouse still works, because that path was never broken.
+  const mouse = T.fromPointer({ pointerId: 1, pointerType: 'mouse', clientX: 42, clientY: 7 });
+  ok(mouse.kind === 'pointer' && mouse.x === 42 && mouse.y === 7, 'the mouse path is untouched');
+
+  // Ids from the two families collide numerically: finger 0 is not mouse 0.
+  ok(T.grabKey({ kind: 'touch', id: 0, x: 0, y: 0 })
+    !== T.grabKey({ kind: 'pointer', id: 0, x: 0, y: 0 }),
+    'finger 0 and pointer 0 are different fingers, so their keys differ');
+
+  // Following the right finger through a multi-touch list.
+  const list = [
+    { identifier: 4, clientX: 10, clientY: 20 },
+    { identifier: 9, clientX: 90, clientY: 80 },
+  ];
+  ok(T.findTouch(list, 9).clientX === 90, 'the second finger is found by its identifier');
+  ok(T.findTouch(list, 4).clientY === 20, 'and so is the first');
+  ok(T.findTouch(list, 7) === null, 'a finger that has lifted is simply not there');
+}
+
 console.log(`\n${fails === 0 ? 'ALL PASS' : fails + ' FAILURES'}\n`);
 process.exit(fails ? 1 : 0);

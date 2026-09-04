@@ -16,7 +16,7 @@ const MODULES = [
   'mathx', 'settings', 'physics', 'assets', 'materials', 'sky', 'theme', 'maps', 'city', 'humanoid', 'characters',
   'weapons', 'vehicle', 'peds', 'traffic', 'combat', 'minimap', 'hudstore',
   'camerarig', 'audio', 'input', 'water', 'ao', 'layout', 'scheme', 'protocol', 'netclient',
-  'weather', 'police', 'jobs', 'device',
+  'weather', 'police', 'jobs', 'device', 'touchinput', 'touchlayout',
 ];
 
 // A file lock (antivirus, an editor, a stray node) can make the build directory
