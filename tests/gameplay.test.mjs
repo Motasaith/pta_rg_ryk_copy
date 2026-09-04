@@ -697,5 +697,81 @@ console.log('\ntouch vs pointer events');
   ok(T.findTouch(list, 7) === null, 'a finger that has lifted is simply not there');
 }
 
+/* -- cornering and drift --------------------------------------------------- */
+console.log('\nhandling: cornering radius and drift');
+{
+  const open = new Physics();
+  open.build();
+
+  /** Drive up to a speed, then hold full lock and report the steady-state corner. */
+  const corner = (kind, kmh, opts = {}) => {
+    const v = createVehicle(kind, 0);
+    placeVehicle(v, 0, 0, 0);
+    v.ctrl.throttle = 1;
+    for (let i = 0; i < 60 * 45; i++) {
+      stepVehicle(v, DT, open);
+      if (v.speed * 3.6 >= kmh) break;
+    }
+    v.ctrl.steer = 1;
+    let sum = 0, n = 0, peakSlip = 0, heldSlip = 0;
+    const FRAMES = 120;
+    for (let i = 0; i < FRAMES; i++) {
+      v.ctrl.handbrake = !!opts.handbrake && i < 22;
+      v.ctrl.throttle = opts.handbrake && i >= 22 ? 1 : 0.85;
+      const y0 = v.yaw;
+      stepVehicle(v, DT, open);
+      let d = v.yaw - y0;
+      while (d > Math.PI) d -= 2 * Math.PI;
+      while (d < -Math.PI) d += 2 * Math.PI;
+      if (i > 20) { sum += Math.abs(d) / DT; n++; }
+      const fx = Math.sin(v.yaw), fz = Math.cos(v.yaw);
+      const rx = Math.cos(v.yaw), rz = -Math.sin(v.yaw);
+      const slip = Math.atan2(Math.abs(v.vx * rx + v.vz * rz),
+        Math.abs(v.vx * fx + v.vz * fz) + 0.5) * 180 / Math.PI;
+      peakSlip = Math.max(peakSlip, slip);
+      if (i > FRAMES - 30) heldSlip = slip;
+    }
+    const rate = sum / Math.max(1, n);
+    return { rate, radius: v.speed / Math.max(rate, 1e-4), peakSlip, heldSlip, kmh: v.speed * 3.6 };
+  };
+
+  // The complaint this covers: an 80 km/h corner used to need 74 m of road, on streets
+  // that are 16 m wide and 80 m apart. The car simply could not turn.
+  const c80 = corner('sedan', 80);
+  ok(c80.radius < 50, `a sedan corners in ${c80.radius.toFixed(0)}m at 80 km/h (was 74m)`);
+  const c40 = corner('sedan', 40);
+  ok(c40.radius < 22, `and ${c40.radius.toFixed(0)}m at 40 km/h, which fits a city street`);
+
+  // ...without becoming a go-kart at the top end.
+  const fastc = corner('hyper', 300);
+  ok(fastc.rate < 0.45,
+    `a hypercar at ${fastc.kmh.toFixed(0)} km/h still only manages ${fastc.rate.toFixed(2)} rad/s`);
+
+  // The drift. The handbrake used to be swallowed whole by the cornering cap: it dropped
+  // grip so the car skated, but the rotation was clamped to exactly the no-handbrake
+  // number, so it never actually came round. It has to rotate MORE, not the same.
+  const plain = corner('sedan', 80);
+  const drift = corner('sedan', 80, { handbrake: true });
+  ok(drift.peakSlip > plain.peakSlip * 2.5,
+    `the handbrake swings the tail out: ${drift.peakSlip.toFixed(0)}deg of slip vs `
+    + `${plain.peakSlip.toFixed(0)}deg on grip`);
+  ok(drift.peakSlip > 15 && drift.peakSlip < 60,
+    `and it is a drift, not a spin (${drift.peakSlip.toFixed(0)}deg)`);
+  ok(drift.heldSlip > 10,
+    `the slide is still there a second later (${drift.heldSlip.toFixed(0)}deg held), rather `
+    + 'than snapping straight the instant the handbrake is released');
+  ok(drift.kmh > 60,
+    `and it carries its speed through the corner (${drift.kmh.toFixed(0)} km/h), instead of `
+    + 'ending up stationary and sideways');
+
+  // The drift window belongs to the player: the AI never pulls a handbrake, and grip that
+  // faded whenever any car was sideways slid forty traffic cars off the road at once.
+  const ai = createVehicle('sedan', 0);
+  placeVehicle(ai, 0, 0, 0);
+  ai.ctrl.throttle = 1;
+  for (let i = 0; i < 60 * 20; i++) stepVehicle(ai, DT, open);
+  ok(ai.driftT === 0, 'a car that never touched the handbrake has no drift window open');
+}
+
 console.log(`\n${fails === 0 ? 'ALL PASS' : fails + ' FAILURES'}\n`);
 process.exit(fails ? 1 : 0);

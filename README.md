@@ -113,6 +113,45 @@ clear it up.
 > `J` rather than `2` for side jobs: you can shoot from a car, so the number row stays
 > the weapon wheel. It is rebindable in Pause → Controls like everything else.
 
+## How the cars corner
+
+The handling model is a bicycle model with a **cornering limit**: `grip * LAT_G` is the
+lateral acceleration the tyres will hold, and `yawRate` is capped at `limit / speed`,
+because `speed * yawRate` *is* lateral acceleration. That cap is the binding constraint at
+every speed, which makes `LAT_G` the single number that decides how the game drives.
+
+It used to be `1.5` - **1.15 g**, honest for a real road car and completely wrong for this
+one. Two things followed:
+
+- An 80 km/h corner needed **74 m** of road. The streets are 16 m wide on an 80 m grid, so
+  the car could not turn at speed at all.
+- The handbrake's 1.45x rotation was clamped to *exactly* the no-handbrake number, so
+  pulling it dropped grip and made the car skate sideways **without ever coming round**.
+  It slid, but it never drifted.
+
+`LAT_G` is now `2.6` - 2 g, an arcade number and deliberately so - and the handbrake
+raises the cap rather than being swallowed by it. The same sedan now corners in 38 m at
+80 km/h and 16 m at 40 km/h, and a handbrake yank swings 23 degrees of slip against 6 on
+grip. Two more pieces make that a drift rather than a spin:
+
+- a **slip limiter** fades rotation that would deepen a slide past ~40 degrees, but never
+  fades a countersteer, so you can always catch it;
+- a **drift window** opened by the handbrake keeps the tyres loose while you hold the
+  throttle through the slide, so it lasts longer than the tap that started it instead of
+  snapping straight in a tenth of a second.
+
+> The drift window is deliberately tied to the handbrake rather than to "is the car
+> sideways and on the throttle". The forty AI cars drive flat out and share this exact
+> physics, and the sideways-and-throttle version slid all of them off the road. The AI
+> never pulls a handbrake, so the mechanic stays in the player's hands.
+>
+> The AI's steering gain moved with it (`-err * 1.9` to `-err * 1.1`). It is a
+> proportional controller against the car's yaw authority, and raising that authority
+> without retuning the gain made every correction overshoot.
+
+`tests/gameplay.test.mjs` measures cornering radius, drift angle and speed carried
+through a corner, so none of this can drift back.
+
 ## Multiplayer and builds
 
 Two rules, both enforced on the wire:

@@ -40,8 +40,14 @@ import { findTouch, fromPointer, fromTouch, Grab, grabKey as key } from '@/game/
 
 /** How much camera rotation one CSS pixel of drag is worth. */
 const LOOK_SCALE = 2.1;
-/** Radius of full stick deflection, in CSS pixels. */
-const STICK_R = 52;
+/**
+ * Radius of full stick deflection, in CSS pixels.
+ *
+ * 44, not 52: a keyboard steers binary full-lock, whereas a thumb has to physically
+ * travel this far to ask for the same thing — so a stick that needs a long throw feels
+ * heavier to steer with than the keyboard does, on top of whatever the car is doing.
+ */
+const STICK_R = 44;
 /** A drag must move this many CSS pixels before it counts as look, not a tap. */
 const TAP_SLOP = 9;
 

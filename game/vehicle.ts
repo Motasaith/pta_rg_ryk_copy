@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { clamp, damp, fwdX, fwdZ, rgtX, rgtZ, wrapPi } from './mathx';
+import { clamp, damp, fwdX, fwdZ, lerp, rgtX, rgtZ, wrapPi } from './mathx';
 import { Box, KIND, Physics } from './physics';
 import { Humanoid } from './humanoid';
 import { tex } from './materials';
@@ -98,6 +98,15 @@ export interface Vehicle {
   alarmT: number;
   /** Seconds of shredded tyres left after a spike strip: less grip, less top speed. */
   spikeT: number;
+  /**
+   * Seconds left of the drift window opened by yanking the handbrake.
+   *
+   * A drift has to be something you *asked* for. Fading grip whenever a car is sideways
+   * and on the throttle also applies to the forty AI cars, which drive flat out and
+   * promptly slid themselves off the road. Tying it to the handbrake keeps the mechanic
+   * entirely in the player's hands, because the traffic AI never pulls one.
+   */
+  driftT: number;
   box: Box;
   /** traffic AI state (null once a human takes the wheel) */
   ai: null | { from: number; to: number; t: number; wait: number; chase: boolean };
@@ -565,7 +574,7 @@ function finishVehicle(
     brakeLight, headLight, lightbar,
     x: 0, y: 0, z: 0, yaw: 0, vx: 0, vz: 0, speed: 0, steerAngle: 0, wheelSpin: 0,
     health: 100,
-    spikeT: 0,
+    spikeT: 0, driftT: 0,
     boost: 1, boosting: false, boostLock: false,
     ctrl: { throttle: 0, brake: 0, steer: 0, handbrake: false, boost: false },
     driver: null, isPlayer: false, siren: false, alarmT: 0,
@@ -601,6 +610,21 @@ export function updateVehicleBox(v: Vehicle): void {
  * would look like a bug rather than like rain.
  */
 let SURFACE_GRIP = 1;
+
+/**
+ * Cornering limit, as a multiple of a car's `grip` in m/s^2. `grip * LAT_G` is the
+ * lateral acceleration the tyres will hold: 2 g for a sedan, which is an arcade number
+ * and deliberately so — a GTA car corners far harder than a real one.
+ */
+const LAT_G = 2.6;
+/** Slip angle the tyres hold before rotation stops being added, gripping and drifting. */
+const GRIP_ANGLE = 0.30;    // ~17 degrees
+const DRIFT_ANGLE = 0.70;   // ~40 degrees
+/** Past this much slip, a car on the throttle keeps sliding instead of snapping straight. */
+const DRIFT_HOLD = 0.10;    // ~6 degrees: low enough that a slide latches rather than
+                            // dipping under the threshold and snapping straight again
+/** How long a handbrake yank leaves the tyres willing to slide. */
+const DRIFT_WINDOW = 1.6;
 
 export function setSurfaceGrip(g: number): void {
   SURFACE_GRIP = g;
@@ -660,14 +684,54 @@ export function stepVehicle(v: Vehicle, dt: number, phys: Physics): void {
   v.steerAngle = damp(v.steerAngle, target, 9, dt);
   // steering right (+) turns the car right, which decreases yaw
   let yawRate = -(v.speed / s.wheelbase) * Math.tan(v.steerAngle) * (c.handbrake ? 1.45 : 1);
-  // Tyres can only generate so much lateral force: cap the turn rate by the cornering
-  // limit. This is what stops a 330 km/h car from turning like a shopping trolley, and it
-  // leaves low-speed parking as tight as ever.
+
   // Wet tarmac and shredded tyres both come off the same cornering limit.
   const surf = SURFACE_GRIP * (v.spikeT > 0 ? 0.55 : 1);
-  const latLimit = s.grip * 1.5 * surf;
+
+  /*
+   * How hard the car may corner, as a lateral acceleration: `v * yawRate` is exactly
+   * that, so the cap is `latLimit / speed`.
+   *
+   * This used to be `grip * 1.5` — 1.15 g for a sedan, which is honest for a real road
+   * car and completely wrong for this one. It was the binding constraint at *every*
+   * speed, which had two consequences: an 80 km/h corner needed 74 m of road (the city's
+   * streets are 16 m wide), and the handbrake's 1.45x rotation was clamped away to
+   * exactly the same number as no handbrake — so pulling it made the car skate sideways
+   * without ever rotating. That is why it slid but never drifted.
+   *
+   * At 2 g the same sedan corners in 25 m, and the handbrake genuinely rotates it.
+   */
+  const latLimit = s.grip * LAT_G * surf * (c.handbrake ? 1.5 : 1);
   const yawCap = latLimit / Math.max(sp, 1.2);
   yawRate = clamp(yawRate, -yawCap, yawCap);
+
+  /*
+   * Slip limiter: the difference between a drift and a spin.
+   *
+   * Measured from *this* frame's velocity against the current heading, before the
+   * rotation is applied. Once the car is already further sideways than the target drift
+   * angle, the front tyres stop being able to add yaw and the rotation is faded out —
+   * so a handbrake turn settles into a held ~40 degree slide instead of carrying on
+   * round to 85 degrees, which is a spin and which is what it used to do.
+   */
+  const hfx = fwdX(v.yaw), hfz = fwdZ(v.yaw);
+  const hrx = rgtX(v.yaw), hrz = rgtZ(v.yaw);
+  const slip = Math.atan2(
+    Math.abs(v.vx * hrx + v.vz * hrz),
+    Math.abs(v.vx * hfx + v.vz * hfz) + 0.5,
+  );
+  const slipMax = c.handbrake ? DRIFT_ANGLE : GRIP_ANGLE;
+  const over = clamp((slip - slipMax) / 0.5, 0, 1);
+  /*
+   * Fade only the rotation that is *deepening* the slide, never a correction out of it.
+   *
+   * Turning right makes yaw decrease, and leaves the velocity pointing to the car's left,
+   * so lateral velocity is negative too: deepening a slide is the case where the two
+   * signs **match**. Countersteering flips one of them, and is left at full strength so
+   * catching a slide always works.
+   */
+  const slideDir = v.vx * hrx + v.vz * hrz;
+  if (Math.sign(yawRate) === Math.sign(slideDir)) yawRate *= 1 - over * 0.9;
   v.yaw += yawRate * dt;
 
   // ── velocity split into forward / lateral, lateral bled off by grip
@@ -676,10 +740,28 @@ export function stepVehicle(v: Vehicle, dt: number, phys: Physics): void {
   let vf = v.vx * fx + v.vz * fz;
   let vs = v.vx * rx + v.vz * rz;
   vf = damp(vf, v.speed, 14, dt);
-  const grip = (c.handbrake ? s.driftGrip : s.grip) * surf;
+  /*
+   * Grip fades once the car is genuinely sideways *and* you keep your foot in.
+   *
+   * Without this the handbrake broke traction and then full grip snapped the car
+   * straight again within about a tenth of a second, so a drift lasted no longer than
+   * the tap that started it. Now a slide sustains itself while you hold the throttle
+   * through it, and comes back the moment you lift or countersteer out — which is the
+   * whole feel of a drift, and it costs one lerp.
+   */
+  // Yanking the handbrake above walking pace opens a drift window; holding the throttle
+  // through it keeps the tyres loose, and lifting off lets them bite and straighten up.
+  if (c.handbrake && sp > 6) v.driftT = DRIFT_WINDOW;
+  else v.driftT = Math.max(0, v.driftT - dt);
+  const sliding = clamp((slip - DRIFT_HOLD) / 0.22, 0, 1);
+  const loose = c.handbrake ? 1 : (v.driftT > 0 ? sliding * clamp(throttle * 1.4, 0, 1) : 0);
+  const grip = lerp(s.grip, s.driftGrip, loose) * surf;
   vs *= Math.exp(-grip * dt);
-  // sliding scrubs speed
-  v.speed -= Math.min(Math.abs(v.speed), Math.abs(vs) * 0.35 * dt);
+  // Sliding scrubs speed — but a drift you have deliberately provoked scrubs far less,
+  // or a handbrake turn ends with the car stationary and sideways instead of carrying
+  // its speed through the corner. That difference is most of what "it doesn't drift"
+  // actually meant: the slide was there, the momentum was not.
+  v.speed -= Math.min(Math.abs(v.speed), Math.abs(vs) * (c.handbrake ? 0.1 : 0.35) * dt);
   v.vx = fx * vf + rx * vs;
   v.vz = fz * vf + rz * vs;
 

@@ -339,7 +339,11 @@ export class Traffic {
     const d = Math.hypot(dx, dz);
     // +err means the target is to the left (yaw must increase), so steer negative
     const err = wrapPi(Math.atan2(dx, dz) - v.yaw);
-    v.ctrl.steer = clamp(-err * 1.9, -1, 1);
+    // Gain 1.1, not 1.9: this is a proportional controller against the car's yaw
+    // authority, and that authority went up when the cornering limit was raised for the
+    // player. Leaving the gain alone made the AI overshoot every correction and weave
+    // itself off the road.
+    v.ctrl.steer = clamp(-err * 1.1, -1, 1);
     const want = d > 22 ? 26 : d > 10 ? 15 : 4;
     const over = v.speed > want;
     v.ctrl.throttle = over ? 0 : 1;
@@ -362,7 +366,7 @@ export class Traffic {
     }
     const dx = target.x - v.x, dz = target.z - v.z;
     const err = wrapPi(Math.atan2(dx, dz) - v.yaw);
-    v.ctrl.steer = clamp(-err * 1.7, -1, 1);
+    v.ctrl.steer = clamp(-err * 1.0, -1, 1);
     v.ctrl.boost = false;      // ordinary traffic pootles along; only pursuit uses nitrous
 
     // progress: project our movement onto the edge direction
