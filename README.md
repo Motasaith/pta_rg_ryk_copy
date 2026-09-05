@@ -113,6 +113,78 @@ clear it up.
 > `J` rather than `2` for side jobs: you can shoot from a car, so the number row stays
 > the weapon wheel. It is rebindable in Pause → Controls like everything else.
 
+## The loading screen key art
+
+Drop an image at **`public/assets/ui/loading.webp`** (`.jpg` and `.png` are also probed,
+in that order) and it becomes the background of **both the loading screen and the title
+screen** - the boot pass, the world-build pass after you press PLAY, and the menu in
+between. Nothing else about either UI changes. One `useKeyArt()` hook resolves the file
+for both, so they can never end up showing different pictures.
+
+It is *probed*, not assumed: the `Loader` in `components/Menus.tsx` loads the file in the
+background and only swaps it in once it has actually decoded. The list stops at the first
+name that works, so the normal case costs no failed requests - a probe that misses logs a
+404, which lights the red badge in the dev overlay and reads as a broken app when nothing
+is wrong. With no file there, the
+original procedural sun-and-road art is drawn exactly as before, so a missing image
+degrades to the old screen rather than to a black rectangle with text on it.
+
+A **corner vignette and a heavy bottom band** sink the bottom-right of the picture into
+shadow. That is not styling for its own sake: the key art has a menu painted into it -
+START / LOAD / OPTIONS / EXIT, and a tagline - which on a loading screen are dead pixels
+that look clickable. They cannot be removed from the image, so they are darkened instead.
+Both are anchored to the edges of the *element*, not to a point in the picture, so they
+still land on the mock menu whichever way `cover` crops for the screen it is on.
+
+The **title screen** gets a lighter touch than the loader: no panel, but weight under the
+hero copy on the left and under the theme cards on the right, with the middle band left
+open so the art actually shows. The per-theme colour wash is kept, made translucent with
+`color-mix` - picking a different map still recolours the screen, which an opaque wash
+would have undone by simply hiding the picture.
+
+The loading UI sits on a **backing panel** over the art. That is deliberate: a gradient
+scrim alone cannot guarantee contrast over artwork nobody controls - key art with a lit
+shopfront or a painted rickshaw behind the text reads straight through one - and the
+requirement was that the loading text stays legible whatever the picture is. The panel
+moves with the shape of the screen: a left column on a desktop, a narrower one on a
+landscape phone so the picture keeps most of the frame, and a bottom card in portrait.
+
+Aim for a wide image, about 2048-2752px, under a megabyte. It is loaded asynchronously and never blocks the game.
+
+## How fast the police care
+
+The wanted level used to be a flat accumulator: heat added straight onto a 0-5 star value
+where every star cost exactly 1.0, and no crime had a ceiling. Two things fell out of it:
+
+- Firing a gun added **0.34 per bullet, hit or miss, witness or not**. Three rounds into
+  an empty sky was a star; one burst from an automatic weapon was the whole meter.
+- One dead officer was worth 2.5 - an **instant two stars** - and two of them was four.
+
+`game/wanted.ts` replaces both with two rules:
+
+- **Every star costs more than the last.** The same crime that takes you from clear to one
+  star barely moves you from three to four.
+- **Every crime has a ceiling** it cannot push you past on its own. Petty offences top out
+  at two stars however many you commit; only shooting police or blowing things up reaches
+  five.
+
+Gunfire also now needs a **witness within earshot** and is rate-limited, so a burst counts
+once rather than thirty times.
+
+| offence | to 1 star | to 3 | to 5 |
+| --- | --- | --- | --- |
+| gunfire heard | 7 | never | never |
+| a punch | 13 | never | never |
+| car alarm | 5 | never | never |
+| civilian killed | 2 | 9 | never |
+| explosion | 2 | 11 | never |
+| officer killed | 1 | 6 | 15 |
+
+The whole tuning surface is one table in `wanted.ts`, and `tests/gameplay.test.mjs`
+asserts the curve - how many of each offence it takes to reach each star, that gunfire can
+never exceed two, that no number of dead civilians summons the helicopter - so it can be
+argued about with numbers rather than adjectives.
+
 ## How the cars corner
 
 The handling model is a bicycle model with a **cornering limit**: `grip * LAT_G` is the
@@ -375,6 +447,7 @@ game/
   weather.ts        rain, dust, wet roads and thunder — two draw calls, no extra passes
   police.ts         roadblocks, spike strips and the pooled search helicopter
   jobs.ts           taxi / vigilante / paramedic shifts on one shared state machine
+  wanted.ts         the crime table and the escalation curve behind the star rating
   device.ts         touch detection, fullscreen and the landscape lock (and why it fails)
   touchinput.ts     one finger, from either TouchEvents or PointerEvents (see the note above)
   touchlayout.ts    the drag-your-buttons-anywhere layout, saved as viewport fractions

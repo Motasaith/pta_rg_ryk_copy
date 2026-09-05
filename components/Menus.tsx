@@ -1,18 +1,61 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { GameMap } from '@/game/maps';
 import { ACTION_LABEL, ACTIONS, Action, DEFAULT_BINDS, keyLabel, QUALITY, Quality, Settings } from '@/game/settings';
 
 /* ── loading + title ──────────────────────────────────────────────────────── */
 
+/**
+ * Key art, used behind both the loading screen and the title screen.
+ *
+ * Tried in order, stopping at the first that decodes, so the common case costs no failed
+ * requests at all. `.webp` leads because that is the format actually being shipped — a
+ * probe that misses first logs a 404, which lights the red badge in the dev overlay and
+ * reads as "something is broken" when nothing is.
+ */
+export const LOADING_ART = [
+  '/assets/ui/loading.webp',
+  '/assets/ui/loading.jpg',
+  '/assets/ui/loading.png',
+];
+
+/**
+ * Resolve the key art once, and hand back '' until it has actually decoded.
+ *
+ * Shared rather than copied into both screens: the two must agree on which file is in
+ * use, or the title would show one picture and the loader another. The browser caches the
+ * image, so the second screen to ask for it pays nothing.
+ */
+function useKeyArt(): string {
+  const [art, setArt] = useState('');
+  useEffect(() => {
+    let live = true;
+    const probe = (i: number) => {
+      if (!live || i >= LOADING_ART.length) return;
+      const img = new Image();
+      img.onload = () => { if (live) setArt(LOADING_ART[i]); };
+      img.onerror = () => probe(i + 1);
+      img.src = LOADING_ART[i];
+    };
+    probe(0);
+    return () => { live = false; };
+  }, []);
+  return art;
+}
+
 export function Loader({ pct, msg }: { pct: number; msg: string }) {
   const progress = Math.max(0, Math.min(100, Math.round(pct)));
+  const art = useKeyArt();
   return (
-    <div className="screen loader">
-      <div className="load-art" aria-hidden="true">
-        <i className="load-sun" /><i className="load-road" /><i className="load-car" />
-      </div>
+    <div className={`screen loader${art ? ' has-art' : ''}`}>
+      {art ? (
+        <div className="load-photo" aria-hidden="true" style={{ backgroundImage: `url(${art})` }} />
+      ) : (
+        <div className="load-art" aria-hidden="true">
+          <i className="load-sun" /><i className="load-road" /><i className="load-car" />
+        </div>
+      )}
       <div className="loadbox" role="status" aria-live="polite">
         <div className="load-kicker"><span /> PAKISTAN, AFTER DARK</div>
         <h1 className="load-title">PT<span>A</span></h1>
@@ -36,8 +79,15 @@ export function Title({ maps, mapId, onPickMap, onStart, onOnline, onSettings }:
   onSettings: () => void;
 }) {
   const chosen = maps.find((m) => m.id === mapId) ?? maps[0];
+  const art = useKeyArt();
   return (
-    <div className="screen title" style={{ '--map-a': chosen.swatch[0], '--map-b': chosen.swatch[1] } as React.CSSProperties}>
+    <div
+      className={`screen title${art ? ' has-art' : ''}`}
+      style={{ '--map-a': chosen.swatch[0], '--map-b': chosen.swatch[1] } as React.CSSProperties}
+    >
+      {art && (
+        <div className="title-photo" aria-hidden="true" style={{ backgroundImage: `url(${art})` }} />
+      )}
       <div className="title-noise" aria-hidden="true" />
       <header className="title-topbar">
         <div className="wordmark">PT<span>A</span> <small>OPEN WORLD</small></div>

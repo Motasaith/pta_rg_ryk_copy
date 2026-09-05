@@ -8,6 +8,7 @@ import { Sky } from './sky';
 import { City, LOT_Y, Poi, Shop } from './city';
 import { DEFAULT_MAP_ID, GameMap, mapAt, mapById, mapIndex } from './maps';
 import { Weather } from './weather';
+import { Crime, CRIME, escalate } from './wanted';
 import { PoliceOps } from './police';
 import { JOB_NAME, jobFor, Jobs } from './jobs';
 import {
@@ -153,6 +154,8 @@ export class Game {
   // heat
   private wanted = 0;
   private wantedCool = 0;
+  /** Rate limit on gunfire heat, so an automatic weapon is not thirty crimes a second. */
+  private gunHeatT = 0;
   private copTimer = 0;
   private bustedT = 0;
 
@@ -1219,11 +1222,11 @@ export class Game {
       v.alarmT = 12.0;
       this.toast('⚠️ CAR ALARM TRIGGERED!');
       this.audio.carAlarm(1.0);
-      this.addWanted(0.5);
+      this.addWanted(CRIME.carAlarm);
       this.peds.panic(v.x, v.z, 32, 8);
     } else {
       this.toast(`Hijacked the ${v.spec.name}!`);
-      this.addWanted(0.15);
+      this.addWanted(CRIME.hijack);
       this.peds.panic(v.x, v.z, 16, 5);
     }
 
@@ -1415,7 +1418,8 @@ export class Game {
       );
       this.rig.addRecoil(spec.recoilPitch, (Math.random() - 0.5) * spec.recoilYaw * 2, spec.shake);
       this.peds.panic(this.px, this.pz, 30, 8);
-      if (!this.net.pvp) this.addWanted(0.4);
+      // firing a rocket is loud, but the explosion it causes is the real crime
+      this.addWanted(CRIME.rocketFired);
       return;
     }
 
@@ -1466,7 +1470,7 @@ export class Game {
     }
     this.rig.addRecoil(spec.recoilPitch, (Math.random() - 0.5) * spec.recoilYaw * 2, spec.shake);
     this.peds.panic(this.px, this.pz, 26, 7);
-    if (!this.net.pvp) this.addWanted(killed ? 0 : 0.34);
+    if (!killed) this.reportGunfire();
   }
 
   private melee(t: number): void {
@@ -1501,7 +1505,7 @@ export class Game {
     this.audio.bodyHit();
     this.hitMarker = 0.22;
     if (died) this.onPedKilled(best);
-    else this.addWanted(0.2);
+    else this.addWanted(CRIME.brawl);
     this.peds.panic(this.px, this.pz, 14, 5);
     void t;
   }
@@ -1548,7 +1552,7 @@ export class Game {
       }
     }
     this.peds.panic(ex, ez, 32, 8);
-    this.addWanted(0.8);
+    this.addWanted(CRIME.explosion);
   }
 
   /** Swing at the nearest enemy player in front of us. Returns true if we connected. */
@@ -1574,7 +1578,9 @@ export class Game {
     this.audio.death();
     this.combat.bloodPool(p.x, p.y, p.z, 1.8);
     this.combat.bloodBurst(p.x, p.y + 1.1, p.z, 0, 1, 0, 12);
-    this.addWanted(p.cop ? 2.5 : 1.4);
+    // Killing civilians tops out at three stars however many you kill; only the police
+    // being shot at brings the whole force down on you.
+    this.addWanted(p.cop ? CRIME.officerKilled : CRIME.civilianKilled);
     // Wallets. Police carry more, and an angry civilian who came at you was carrying
     // enough to be worth the trouble — so a fight is never a pure loss.
     const rich = p.swat ? 3 : p.cop ? 2 : p.state === 'aggro' ? 1.6 : 1;
@@ -1585,15 +1591,36 @@ export class Game {
 
   /* ── police / wanted ──────────────────────────────────────────────────── */
 
-  private addWanted(amount: number): void {
-    if (amount <= 0) return;
+  /** Apply one offence. The curve and the tuning table both live in wanted.ts. */
+  private addWanted(c: Crime): void {
+    if (this.net.pvp) return;
     const before = Math.floor(this.wanted);
-    this.wanted = clamp(this.wanted + amount, 0, 5);
+    const after = escalate(this.wanted, c);
+    if (after <= this.wanted) return;
+    this.wanted = after;
     this.wantedCool = 0;
     if (Math.floor(this.wanted) > before) this.audio.wanted();
   }
 
+  /**
+   * A gunshot only counts if somebody is around to report it.
+   *
+   * This used to be a flat `addWanted(0.34)` on *every shot fired*, hit or miss, witness
+   * or not — so three rounds into an empty sky was a star, and one burst from an
+   * automatic weapon was the whole wanted meter. Now it needs a witness within earshot,
+   * it is rate-limited so a burst counts once rather than per bullet, and it cannot take
+   * you past two stars on its own.
+   */
+  private reportGunfire(): void {
+    if (this.net.pvp || this.gunHeatT > 0) return;
+    const witness = this.peds.nearestAlive(this.px, this.pz, 34);
+    if (!witness) return;
+    this.gunHeatT = 1.1;
+    this.addWanted(witness.cop ? CRIME.gunfireSeenByCop : CRIME.gunfireHeard);
+  }
+
   private updateHeat(dt: number): void {
+    this.gunHeatT = Math.max(0, this.gunHeatT - dt);
     if (this.wanted > 0) {
       const seen = this.peds.nearestAlive(this.px, this.pz, 45, true);
       let visible = false;
@@ -2470,8 +2497,8 @@ export class Game {
         if (died) {
           this.combat.bloodPool(p.x, p.y, p.z, 2.2);
           this.audio.death();
-          if (v.isPlayer) this.addWanted(p.cop ? 2.5 : 1.6);
-        } else if (v.isPlayer) this.addWanted(0.6);
+          if (v.isPlayer) this.addWanted(p.cop ? CRIME.officerKilled : CRIME.civilianRunOver);
+        } else if (v.isPlayer) this.addWanted(CRIME.pedestrianStruck);
         v.speed *= 0.86;
         this.peds.panic(p.x, p.z, 18, 6);
       }

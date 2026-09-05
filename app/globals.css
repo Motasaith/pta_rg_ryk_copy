@@ -1305,3 +1305,140 @@ input[type="range"]::-moz-range-thumb {
   border-radius: 10px;
   line-height: 1.7;
 }
+
+/* ── loading screen key art ──────────────────────────────────────────────────
+   The painted background, with the loading UI kept exactly as it was on top of
+   it. Only applied when the file actually loaded (see Loader in Menus.tsx), so a
+   missing image falls back to the procedural sun-and-road art rather than to a
+   black screen. */
+.load-photo {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+/* A light overall scrim: enough to sit the UI in front of the picture and to keep
+   the art from fighting it, but not so much that the art is wasted. The contrast
+   the text actually depends on comes from the panel below, not from this. */
+.loader.has-art::before {
+  z-index: 1;
+  background:
+    /* Corner vignette over the bottom-right. The key art has a menu painted into it —
+       START / LOAD / OPTIONS / EXIT and a tagline — which on a loading screen are dead
+       pixels that look clickable. They cannot be removed from the picture, so they are
+       sunk into shadow instead. Anchored to the corner of the element rather than to a
+       point in the image, so it still lands on them whichever way `cover` crops. */
+    radial-gradient(78% 56% at 100% 100%,
+      rgba(5, 8, 11, 0.95) 0 30%, rgba(5, 8, 11, 0.78) 56%, transparent 84%),
+    linear-gradient(100deg, rgba(5, 8, 11, 0.72) 0 22%, rgba(5, 8, 11, 0.3) 46%,
+      rgba(5, 8, 11, 0.06) 66%, rgba(5, 8, 11, 0.3) 100%),
+    /* A heavy bottom band as well as the corner. `cover` crops differently on every
+       screen shape, and the painted tagline sits along the very bottom of the art — on a
+       wide phone the corner vignette alone slides off the left end of it. */
+    linear-gradient(0deg, rgba(5, 8, 11, 0.92) 0 7%, rgba(5, 8, 11, 0.62) 22%,
+      rgba(5, 8, 11, 0.22) 40%, transparent 56%);
+}
+
+/*
+ * A backing panel for the loading UI.
+ *
+ * A gradient alone cannot guarantee contrast over artwork you do not control: the
+ * key art has a lit shopfront and a painted rickshaw exactly where the text sits,
+ * and both read straight through a scrim. A panel does guarantee it, whatever the
+ * picture behind it turns out to be — which was the requirement.
+ */
+.loader.has-art .loadbox {
+  padding: clamp(22px, 3vw, 42px);
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: linear-gradient(155deg, rgba(6, 9, 12, 0.9), rgba(6, 9, 12, 0.74));
+  backdrop-filter: blur(14px) saturate(0.75);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.55);
+}
+.loader.has-art .load-title { text-shadow: 0 6px 30px rgba(0, 0, 0, 0.7), 6px 7px 0 rgba(0, 0, 0, 0.45); }
+.loader.has-art .loadnote { color: rgba(255, 255, 255, 0.46); }
+.loader.has-art .bar { background: rgba(0, 0, 0, 0.5); }
+
+/* Portrait, or a narrow window: no room for a column beside the art, so the panel
+   sits low and the picture keeps the top of the frame to itself. */
+@media (max-aspect-ratio: 1/1) {
+  .loader.has-art { justify-content: center; align-items: flex-end; padding-bottom: clamp(28px, 8vh, 72px); }
+  .loader.has-art::before {
+    background:
+      radial-gradient(88% 40% at 100% 100%,
+        rgba(5, 8, 11, 0.95) 0 34%, rgba(5, 8, 11, 0.7) 62%, transparent 88%),
+      linear-gradient(0deg, rgba(5, 8, 11, 0.86) 0 34%, rgba(5, 8, 11, 0.3) 62%,
+        rgba(5, 8, 11, 0.5) 100%);
+  }
+  .load-photo { background-position: 56% 26%; }
+  .loader.has-art .load-title { font-size: clamp(3rem, 16vw, 5rem); }
+  .loader.has-art .load-status { margin-top: clamp(20px, 4vh, 36px); }
+}
+
+/* A landscape phone is 390px tall: the panel has to give the picture room back. */
+@media (max-height: 560px) and (min-aspect-ratio: 1/1) {
+  .loader.has-art { padding: clamp(16px, 4vw, 40px); }
+  .loader.has-art .loadbox { width: min(400px, 58vw); padding: clamp(14px, 2.2vw, 24px); }
+  .loader.has-art .load-title { font-size: clamp(2.4rem, 9vh, 3.4rem); margin-top: 12px; }
+  .loader.has-art .load-status { margin-top: clamp(14px, 4vh, 26px); }
+  .loader.has-art .load-status strong { font-size: 20px; }
+  .loader.has-art .loadnote { margin-top: 9px; font-size: 8.5px; }
+}
+
+/* ── title screen key art ─────────────────────────────────────────────────────
+   The same picture as the loading screen, behind the menu. The title UI spans
+   the whole frame, so this needs a much heavier scrim than the loader — there is
+   no empty half to put the art in. */
+.title-photo {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+.title.has-art::before {
+  z-index: 1;
+  background:
+    /* the mock menu painted into the art, sunk into the bottom-right corner */
+    radial-gradient(70% 46% at 100% 100%,
+      rgba(6, 10, 13, 0.95) 0 32%, rgba(6, 10, 13, 0.72) 60%, transparent 86%),
+    /*
+     * Legibility for the two columns of type, and a deliberate gap between them.
+     * The first pass darkened the whole frame evenly and the picture disappeared —
+     * which defeats the point of having one. This keeps weight under the hero copy
+     * on the left and under the theme cards on the right, and lets the middle band,
+     * where the character stands, come through.
+     */
+    linear-gradient(90deg, rgba(6, 10, 13, 0.9) 0 22%, rgba(6, 10, 13, 0.6) 36%,
+      rgba(6, 10, 13, 0.24) 48%, rgba(6, 10, 13, 0.5) 62%, rgba(6, 10, 13, 0.78) 100%),
+    /* a soft pool under the hero copy: the art has a lit shopfront right where the
+       PTA lockup sits, and its signage reads straight through an even scrim */
+    radial-gradient(44% 42% at 20% 45%,
+      rgba(6, 10, 13, 0.82) 0 32%, rgba(6, 10, 13, 0.45) 62%, transparent 82%),
+    linear-gradient(0deg, rgba(6, 10, 13, 0.92) 0 9%, rgba(6, 10, 13, 0.55) 20%,
+      rgba(6, 10, 13, 0.2) 34%, transparent 48%),
+    /*
+     * The per-theme colour wash, kept but made translucent with color-mix so the
+     * photo shows through it. Picking a different map still recolours the screen,
+     * which is the whole point of the wash — an opaque one would simply hide the
+     * picture and undo the change.
+     */
+    linear-gradient(145deg,
+      color-mix(in srgb, var(--map-a) 18%, transparent),
+      color-mix(in srgb, var(--map-b) 34%, transparent));
+}
+
+/* With a picture behind it, bare type needs its own weight. */
+.title.has-art .titlecard h1 { text-shadow: 0 8px 40px rgba(0, 0, 0, 0.85), 4px 4px 0 #12171b; }
+.title.has-art .titlecard p,
+.title.has-art .eyebrow,
+.title.has-art .maplabel,
+.title.has-art .keys span,
+.title.has-art .wordmark { text-shadow: 0 2px 14px rgba(0, 0, 0, 0.9); }
+.title.has-art .title-noise { z-index: 1; }
+/* the huge watermark behind everything competes with a photo; drop it */
+.title.has-art::after { opacity: 0.4; }

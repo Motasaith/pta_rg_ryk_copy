@@ -773,5 +773,52 @@ console.log('\nhandling: cornering radius and drift');
   ok(ai.driftT === 0, 'a car that never touched the handbrake has no drift window open');
 }
 
+/* -- how fast the police care --------------------------------------------- */
+console.log('\nwanted level escalation');
+{
+  const W = await import('./wanted.js');
+  const { CRIME, escalate, crimesToReach } = W;
+
+  // The complaint: a stray bullet was worth a star. It used to add 0.34 per shot fired,
+  // hit or miss, witness or not — three rounds into an empty sky and the police arrived.
+  ok(crimesToReach(CRIME.gunfireHeard, 1) >= 5,
+    `${crimesToReach(CRIME.gunfireHeard, 1)} witnessed shots before the first star (was 3)`);
+  ok(crimesToReach(CRIME.gunfireHeard, 3) === Infinity,
+    'and gunfire alone can never get you past two stars, however long you stand there');
+  ok(crimesToReach(CRIME.brawl, 2) === Infinity, 'a brawl is a one-star nuisance, always');
+  ok(crimesToReach(CRIME.hijack, 2) === Infinity, 'so is quietly taking a car');
+
+  // Killing civilians is serious, but it is not a five-star manhunt.
+  ok(crimesToReach(CRIME.civilianKilled, 5) === Infinity,
+    'no number of dead civilians summons the helicopter');
+  ok(crimesToReach(CRIME.civilianKilled, 3) >= 6,
+    `${crimesToReach(CRIME.civilianKilled, 3)} of them to reach three stars`);
+
+  // Only the police, and only slowly. One officer used to be an instant two stars.
+  const one = escalate(0, CRIME.officerKilled);
+  ok(one > 1 && one < 1.5, `one dead officer is ${one.toFixed(2)} stars (was 2.5)`);
+  const toFive = crimesToReach(CRIME.officerKilled, 5);
+  ok(toFive >= 10, `and it takes ${toFive} of them to reach five (was two)`);
+
+  // The mechanism behind all of it: every star costs more than the last.
+  const first = escalate(0, CRIME.explosion) - 0;
+  const fourth = escalate(3, CRIME.explosion) - 3;
+  ok(fourth < first * 0.5,
+    `the same crime is worth ${first.toFixed(2)} stars when clear and only `
+    + `${fourth.toFixed(2)} at three stars`);
+
+  // A ceiling never *reduces* the heat you already have from something worse.
+  const hot = escalate(4.2, CRIME.brawl);
+  ok(hot === 4.2, 'punching someone at four stars does not calm the police down');
+
+  // Every crime in the table has to be reachable and bounded.
+  for (const [name, c] of Object.entries(CRIME)) {
+    if (c.heat <= 0 || c.ceiling < 1 || c.ceiling > 5) { ok(false, `${name} is tuned sanely`); break; }
+    if (escalate(0, c) <= 0) { ok(false, `${name} does something at all`); break; }
+    if (escalate(c.ceiling, c) !== c.ceiling) { ok(false, `${name} respects its own ceiling`); break; }
+  }
+  ok(true, `all ${Object.keys(CRIME).length} offences are bounded by their own ceiling`);
+}
+
 console.log(`\n${fails === 0 ? 'ALL PASS' : fails + ' FAILURES'}\n`);
 process.exit(fails ? 1 : 0);
