@@ -197,6 +197,13 @@ export class GameAudio {
     this.tone('square', 1400, 1100, 0.08, 0.12 * vol, 0.1);
   }
 
+  /** The latch and the hinge. Lighter than the slam, which is what shuts it. */
+  carDoorOpen(): void {
+    if (!this.ctx) return;
+    this.tone('square', 280, 200, 0.05, 0.09);
+    this.burst(0.11, 0.22, 950, 1.1, 'bandpass', 0.28);
+  }
+
   carDoorSlam(): void {
     if (!this.ctx) return;
     this.burst(0.12, 0.45, 550, 1.4, 'lowpass');

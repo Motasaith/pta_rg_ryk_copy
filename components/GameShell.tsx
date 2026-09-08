@@ -184,6 +184,11 @@ export default function GameShell() {
 
       {hud.mapOpen && <MapOverlay mapRef={mapRef} onClose={() => gameRef.current?.toggleMap(false)} />}
 
+      {hud.fade > 0 && (
+        <div className="doorfade" style={{ opacity: hud.fade }} />
+      )}
+      {hud.interior && hud.phase === 'playing' && <div className="interiorname">{hud.interior}</div>}
+
       {hud.shopOpen && (
         <ShopMenu
           money={hud.money}

@@ -744,6 +744,13 @@ input[type="range"]::-moz-range-thumb {
   cursor: pointer;
 }
 .cheathint:hover { background: rgba(20, 46, 30, 0.95); }
+.cheatmore {
+  padding: 5px 12px;
+  background: rgba(8, 16, 12, 0.86);
+  color: #4b6b58;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
 .cheathint b { min-width: 13ch; letter-spacing: 0.08em; color: #48e588; }
 .cheathint span { color: #6d8478; font-size: 10.5px; }
 .cheatinput {
@@ -1442,3 +1449,26 @@ input[type="range"]::-moz-range-thumb {
 .title.has-art .title-noise { z-index: 1; }
 /* the huge watermark behind everything competes with a photo; drop it */
 .title.has-art::after { opacity: 0.4; }
+
+/* ── walking through a door ──────────────────────────────────────────────── */
+.doorfade {
+  position: absolute;
+  inset: 0;
+  background: #000;
+  pointer-events: none;
+  z-index: 800;
+}
+.interiorname {
+  position: absolute;
+  left: 50%;
+  top: 74px;
+  transform: translateX(-50%);
+  padding: 5px 16px;
+  border-radius: 4px;
+  background: rgba(8, 12, 16, 0.72);
+  color: #e8e4d8;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  pointer-events: none;
+}

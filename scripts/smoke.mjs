@@ -17,6 +17,7 @@ const MODULES = [
   'weapons', 'vehicle', 'peds', 'traffic', 'combat', 'minimap', 'hudstore',
   'camerarig', 'audio', 'input', 'water', 'ao', 'layout', 'scheme', 'protocol', 'netclient',
   'weather', 'police', 'jobs', 'device', 'touchinput', 'touchlayout', 'wanted',
+  'outfits', 'ik', 'carentry', 'interior',
 ];
 
 // A file lock (antivirus, an editor, a stray node) can make the build directory

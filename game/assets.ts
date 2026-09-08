@@ -51,6 +51,24 @@ const MODEL_FILES: Record<string, string> = {
   sports: 'sports', muscle: 'muscle', hyper: 'hyper', character: 'character',
 };
 
+/**
+ * Models we will use if they turn up, and shrug about if they do not.
+ *
+ * There is no free, redistributable model of a Suzuki Bolan, a Pakistani auto rickshaw or
+ * a Bedford with truck art — see `docs/assets.md` for what was actually out there and
+ * under what licence. All three are built procedurally instead, which is better anyway,
+ * because a generic western box van standing in for a Carry Daba makes the street *less*
+ * Pakistani rather than more.
+ *
+ * These are here so that dropping a file into `public/assets/models` is all it takes to
+ * use one later. They are deliberately not counted by `report()`: a missing optional
+ * model is not a broken install, and telling the player their assets failed because they
+ * have not hand-sourced a rickshaw would be a lie.
+ */
+const OPTIONAL_MODEL_FILES: Record<string, string> = {
+  carry: 'carry', rickshaw: 'rickshaw', truck: 'truck', van: 'van',
+};
+
 /** True only in a real browser context — Node (tests) skips all downloads. */
 function canFetch(): boolean {
   return typeof window !== 'undefined' && typeof window.location?.href === 'string'
@@ -142,17 +160,17 @@ export class AssetBank {
     })());
 
     const gltf = new GLTFLoader();
-    for (const [key, file] of Object.entries(MODEL_FILES)) {
-      jobs.push((async () => {
-        const g = await withTimeout(gltf.loadAsync(`/assets/models/${file}.glb`));
-        if (g) {
-          // The mixer needs the clips; stashed on the scene so the bank stays one map.
-          g.scene.userData.clips = g.animations;
-          this.models.set(key, g.scene);
-        }
-        bump();
-      })());
-    }
+    const loadModel = (key: string, file: string, counted: boolean) => jobs.push((async () => {
+      const g = await withTimeout(gltf.loadAsync(`/assets/models/${file}.glb`));
+      if (g) {
+        // The mixer needs the clips; stashed on the scene so the bank stays one map.
+        g.scene.userData.clips = g.animations;
+        this.models.set(key, g.scene);
+      }
+      if (counted) bump();
+    })());
+    for (const [key, file] of Object.entries(MODEL_FILES)) loadModel(key, file, true);
+    for (const [key, file] of Object.entries(OPTIONAL_MODEL_FILES)) loadModel(key, file, false);
 
     await Promise.all(jobs);
   }

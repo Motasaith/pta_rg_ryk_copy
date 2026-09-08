@@ -8,7 +8,14 @@ import { Sky } from './sky';
 import { City, LOT_Y, Poi, Shop } from './city';
 import { DEFAULT_MAP_ID, GameMap, mapAt, mapById, mapIndex } from './maps';
 import { Weather } from './weather';
-import { Crime, CRIME, escalate } from './wanted';
+import { Crime, CRIME, escalate, riseTowards } from './wanted';
+import {
+  atDoor, buildInterior, nearestStand, type Interior, type InteriorKind, type Stand,
+} from './interior';
+import {
+  CLIMB_OUT, doorPoint, driverSide, enterPose, enterTime, EXIT_TIME, exitPose, stepTime,
+  type MovePose, type Spot,
+} from './carentry';
 import { PoliceOps } from './police';
 import { JOB_NAME, jobFor, Jobs } from './jobs';
 import {
@@ -36,8 +43,32 @@ import {
   setSurfaceGrip, stepVehicle, updateAlarm, updateVehicleBox, Vehicle, VehKind, vehicleSpeedKmh,
 } from './vehicle';
 
+/** Where the hips sit in the seated pose, and how far the top of the head is above them. */
+const SEATED_HIP = 0.91;
+const SEATED_HEAD = 0.74;
+
+/**
+ * Where to put a seated character's root inside a car body.
+ *
+ * This used to be a hand-tuned drop per vehicle class, and it did not survive contact
+ * with the low cars: a hypercar roof is 1.14m and the table put the top of the head at
+ * 1.30m, so the driver's head was outside the car. Derive it instead — sit the hips on
+ * the seat, then, if the head would still clip the roof, sink the whole body until it
+ * does not. Every car is right by construction, including any added later.
+ */
+function seatHeight(v: Vehicle): number {
+  let y = v.spec.seat[1] - SEATED_HIP;
+  const headTop = y + SEATED_HIP + SEATED_HEAD;
+  const roof = v.spec.height - 0.1;
+  if (headTop > roof) y -= headTop - roof;
+  return y;
+}
+
 /** Seconds under water before the canal has finished with you. */
 const DROWN_SECONDS = 4.2;
+
+/** Click again inside this many seconds and the strike chains instead of restarting. */
+const COMBO_WINDOW = 0.75;
 
 const WALK_SPEED = 2.3;
 const CROUCH_SPEED = 1.35;
@@ -47,6 +78,23 @@ const PLAYER_R = 0.34;
 const PLAYER_H = 1.78;
 const STEP_UP = 0.45;
 const GRAVITY = 17;
+/**
+ * The shirts in the wardrobe at home. Gold first, because that is what the hero starts in
+ * and the one thing on screen you should never lose track of.
+ */
+const OUTFITS = [0xf2c14e, 0xe8e4d8, 0x9fb0bb, 0xc9bda6, 0x8fa3a8, 0xb3564e, 0x7f9a72];
+
+/** Darken a packed colour: trousers sit a shade under the shirt. */
+function shade(hex: number, k: number): number {
+  return (Math.round(((hex >> 16) & 255) * k) << 16)
+    | (Math.round(((hex >> 8) & 255) * k) << 8)
+    | Math.round((hex & 255) * k);
+}
+/** RANGBIRANGI. Loud on purpose — a repaint you cannot see is not a cheat. */
+const CHEAT_PAINT = [
+  0xff2f6d, 0x00d6c2, 0xffd21e, 0x7a3cff, 0x21e05a,
+  0xff7a18, 0x00a5ff, 0xff4de0, 0xc8ff2b, 0xff1f1f,
+];
 const JUMP_V = 5.6;
 
 interface MissionItem {
@@ -127,6 +175,12 @@ export class Game {
   private dead = false;
   private deadT = 0;
   private punchT = 0;
+  /** Which hand throws the next strike, and whether it is a blade arc. */
+  private punchSide = 1;
+  private punchSlash = false;
+  /** Where we are in a three-hit combo, and when the last strike landed. */
+  private combo = 0;
+  private lastMeleeT = -99;
   private flinch = 0;
   private footPhase = 0;
 
@@ -152,7 +206,53 @@ export class Game {
   private lastShotT = -99;
 
   // heat
+  /**
+   * Getting in or out of a car, mid-move.
+   *
+   * The car is claimed the moment this starts — off the traffic AI, and off the room if
+   * we are online — so nobody drives away with it while the door is still opening. The
+   * seating itself waits until the move finishes.
+   */
+  private carMove: {
+    v: Vehicle;
+    out: boolean;
+    t: number;
+    side: number;
+    from: MovePose;
+    spot: Spot;
+    /** How long the walk to the door gets; scaled to how far away it is. */
+    stepT: number;
+  } | null = null;
+  /**
+   * The room the player is stood in, and the pavement they left to get there.
+   *
+   * While this is set the player is six kilometres from the city, so every world system
+   * that streams to the player's position — traffic, the crowd, the police, drowning —
+   * is skipped rather than pointed at a phantom. The minimap and the wanted level are
+   * fed the outside position instead, which is what makes hiding in a shop cool you off.
+   */
+  private interior: {
+    it: Interior;
+    outX: number;
+    outZ: number;
+    outYaw: number;
+    name: string;
+    /** stops the doorway you just walked in through from throwing you straight back out */
+    grace: number;
+  } | null = null;
+  private interiors = new Map<InteriorKind, Interior>();
+  private outfitIdx = 0;
+  /** Door transition: counts down, and the swap happens at the halfway point. */
+  private fadeT = 0;
+  private fadeDur = 0;
+  private fadeGo: (() => void) | null = null;
   private wanted = 0;
+  /**
+   * Where the meter is heading. Crimes move this; `wanted` climbs towards it at
+   * RISE_RATE in updateHeat. Never assign `wanted` on its own — use setWanted, or the
+   * displayed level and the police response drift apart.
+   */
+  private wantedTarget = 0;
   private wantedCool = 0;
   /** Rate limit on gunfire heat, so an automatic weapon is not thirty crimes a second. */
   private gunHeatT = 0;
@@ -173,6 +273,12 @@ export class Game {
   /** UNLIMITEDHEALTH: damage is ignored entirely. */
   private invincible = false;
   private speedFreak = false;
+  /** BULLETTIME. Scales the whole simulation, so physics, animation and AI all slow. */
+  private timeScale = 1;
+  private lowGrav = false;
+  private infiniteAmmo = false;
+  private ironFist = false;
+  private carArmour = false;
   /** Console open? While it is, every gameplay bind is dead and the mouse is free. */
   private consoleOpen = false;
   /** How long we have been under water, in seconds. */
@@ -344,9 +450,12 @@ export class Game {
 
   private spawnPlayer(): void {
     this.hero = createHumanoid({
+      // gold shirt — the one thing on screen you should never lose track of
       skin: SKINS[1], shirt: 0xf2c14e, pants: 0x2f4a6d, hair: 0x1d130c, shoes: 0xb3352a, scale: 1,
     });
     this.scene.add(this.hero.root);
+    // Re-run the equip now that there is a hero: setWeapon ran during init, before this.
+    this.setWeapon(this.weapon, true);
     const s = this.city.playerStart;
     this.px = s.x;
     this.pz = s.z;
@@ -783,7 +892,7 @@ export class Game {
   private onMatchChange(m: MatchState, prev: MatchState): void {
     if (m.state === MATCH_LIVE && prev.state !== MATCH_LIVE) {
       // A match starts everyone fresh, wherever they happened to be standing.
-      this.wanted = 0;
+      this.setWanted(0);
       this.peds.removeCops();
       this.audio.sirenOff();
       this.health = 100;
@@ -857,7 +966,9 @@ export class Game {
       this.input.endFrame();
       return;
     }
-    const dt = Math.min(raw, 0.05);
+    // BULLETTIME scales here rather than in each system: everything downstream takes dt,
+    // so one multiply slows the cars, the crowd, the animation and the weather together.
+    const dt = Math.min(raw, 0.05) * this.timeScale;
     this.elapsed += dt;
     const t0 = performance.now();
 
@@ -925,33 +1036,48 @@ export class Game {
     if (this.weather.thunderCue) this.audio.thunder(0.35 + this.rng() * 0.6);
     this.audio.rainLevel(this.weather.hiss);
 
-    if (this.dead) this.updateDead(dt);
+    if (this.dead) {
+      if (this.carMove) this.cancelCarMove();
+      this.updateDead(dt);
+    } else if (this.carMove) this.updateCarMove(dt, t);
     else if (this.vehicle) this.updateDriving(dt, t);
     else this.updateOnFoot(dt, t);
 
     this.updateWeapons(dt, t);
     this.updateHeat(dt);
 
-    // world
-    this.streamTimer -= dt;
-    if (this.streamTimer <= 0) {
-      this.streamTimer = 2.5;
-      this.traffic.streamTo(this.px, this.pz);
+    this.updateFade(dt);
+    if (this.interior) this.interior.grace = Math.max(0, this.interior.grace - dt);
+
+    // The world, which is only there while you are in it.
+    //
+    // Indoors the player is six kilometres from the city, so pointing the streaming
+    // systems at them would spawn a traffic jam in the void and walk the crowd off the
+    // edge of the map. Freezing the street for the length of a shopping trip is both
+    // cheaper and what every GTA has done. Combat particles and the prompt still run,
+    // because both of those are about the room you are actually stood in.
+    if (!this.interior) {
+      this.streamTimer -= dt;
+      if (this.streamTimer <= 0) {
+        this.streamTimer = 2.5;
+        this.traffic.streamTo(this.px, this.pz);
+      }
+      this.traffic.update(dt, t, this.vehicle, this.px, this.pz, this.wanted > 0 ? { x: this.px, z: this.pz } : null);
+      this.runOverCheck(dt);
+      this.peds.update(
+        dt, t, this.px, this.py, this.pz, !this.dead, this.wanted,
+        (cop) => this.copShoot(cop),
+        this.preset.drawDistance * 0.6,
+      );
+      this.updateItems(dt, t);
+      this.updateDrowning(dt);
+      this.updateWrecks(dt);
+      this.updateOps(dt, t);
+      this.updateGarage(dt);
+      this.jobs.update(dt, this.vehicle, this.px, this.pz, this.traffic.cars);
     }
-    this.traffic.update(dt, t, this.vehicle, this.px, this.pz, this.wanted > 0 ? { x: this.px, z: this.pz } : null);
-    this.runOverCheck(dt);
-    this.peds.update(
-      dt, t, this.px, this.py, this.pz, !this.dead, this.wanted,
-      (cop) => this.copShoot(cop),
-      this.preset.drawDistance * 0.6,
-    );
     this.combat.update(dt);
-    this.updateItems(dt, t);
     this.updateInteraction();
-    this.updateDrowning(dt);
-    this.updateOps(dt, t);
-    this.updateGarage(dt);
-    this.jobs.update(dt, this.vehicle, this.px, this.pz, this.traffic.cars);
 
     if (this.cheatMsgT > 0) {
       this.cheatMsgT -= dt;
@@ -1042,9 +1168,17 @@ export class Game {
       const nx = this.px + (this.vx * dt) / steps;
       const nz = this.pz + (this.vz * dt) / steps;
       this.phys.resolveCircle(nx, nz, PLAYER_R, this.py, this.py + PLAYER_H, STEP_UP, true);
-      const B = this.city.bounds;
-      this.px = clamp(this.phys.outX, B.minX, B.maxX);
-      this.pz = clamp(this.phys.outZ, B.minZ, B.maxZ);
+      if (this.interior) {
+        // Interiors are parked far outside the city on purpose; clamping to the city's
+        // bounds in here would drag the player back to the edge of the map the instant
+        // they took a step, which is precisely what it did the first time.
+        this.px = this.phys.outX;
+        this.pz = this.phys.outZ;
+      } else {
+        const B = this.city.bounds;
+        this.px = clamp(this.phys.outX, B.minX, B.maxX);
+        this.pz = clamp(this.phys.outZ, B.minZ, B.maxZ);
+      }
     }
 
     // vertical
@@ -1062,7 +1196,7 @@ export class Game {
         this.vy = 0;
       }
     } else {
-      this.vy -= GRAVITY * dt;
+      this.vy -= GRAVITY * (this.lowGrav ? 0.3 : 1) * dt;
       this.py += this.vy * dt;
       const g2 = this.phys.groundHeight(this.px, this.pz, PLAYER_R, this.py + 0.3);
       if (this.py <= g2 && this.vy <= 0) {
@@ -1101,10 +1235,16 @@ export class Game {
     this.punchT = Math.max(0, this.punchT - dt);
     poseHumanoid(this.hero, {
       dt, t, speed: this.speed, runSpeed: RUN_SPEED, grounded: this.grounded, airVy: this.vy,
-      aiming: this.aiming || (firing && this.weapon !== 'fists'),
+      // A blade is swung, not aimed. Firing used to drop every weapon except bare fists
+      // into the two-handed rifle stance, which is why the knife and the katana were
+      // held out in front like pistols.
+      aiming: this.aiming || (firing && !WEAPONS[this.weapon].melee),
       aimPitch: -this.rig.pitch, dead: 0, seated: false,
       crouching: this.crouching,
-      punch: this.punchT > 0.22 ? 1 : 0, flinch: this.flinch, steer: 0,
+      punch: this.punchT > 0.22 ? 1 : 0,
+      punchSide: this.punchSide,
+      slash: this.punchSlash,
+      flinch: this.flinch, steer: 0,
       // the head tracks the camera, so looking around actually looks around
       lookYaw: wrapPi(this.rig.yaw - this.pyaw),
       lookPitch: this.rig.pitch - 0.24,
@@ -1176,10 +1316,24 @@ export class Game {
     }
   }
 
+  /**
+   * Start getting into a car.
+   *
+   * Pressing E used to put you in the driver's seat on the same frame you were stood on
+   * the pavement. Now it opens a move: round to the door, then in. The claim happens here
+   * rather than when the move lands, so the traffic AI — or another player — cannot drive
+   * off with the car you are halfway into.
+   */
   private enterVehicle(v: Vehicle): void {
-    this.vehicle = v;
+    if (this.carMove || this.vehicle) return;
+    const held = this.models[this.weapon];
+    if (held) held.group.visible = false;
     v.isPlayer = true;
     v.ai = null;
+    v.ctrl.throttle = 0;
+    v.ctrl.brake = 1;
+    v.ctrl.steer = 0;
+    if (this.carArmour) v.armoured = true;
     this.traffic.release(v);
     // Tell the room this car is ours: the host stops simulating and broadcasting it, and
     // everyone else drops their copy, so nobody sees two of the taxi we just stole.
@@ -1188,14 +1342,41 @@ export class Game {
       this.traffic.setClaimed(v.netId, true);
       this.net.sendClaim(v.netId, true);
     }
-    // seat the hero inside the body so they roll with the suspension and sit properly inside the cabin
+    const side = this.pickDoorSide(v);
+    const d = doorPoint(v.x, v.z, v.yaw, v.spec.halfW, v.spec.seat[2], side);
+    this.carMove = {
+      v, out: false, t: 0, side,
+      from: { x: this.px, y: this.py, z: this.pz, yaw: this.pyaw, crouch: 0 },
+      spot: { x: this.px, z: this.pz },
+      stepT: stepTime(Math.hypot(d.x - this.px, d.z - this.pz)),
+    };
+    this.audio.carDoorOpen();
+  }
+
+  /**
+   * Which side to use. The driver's door if there is room to stand at it, and the other
+   * side if there is not — otherwise parking with your nearside against a wall makes the
+   * car unusable, which is exactly where you park in a city.
+   */
+  private pickDoorSide(v: Vehicle): number {
+    const want = driverSide(v.spec.seat[0]);
+    for (const side of [want, -want]) {
+      const d = doorPoint(v.x, v.z, v.yaw, v.spec.halfW, v.spec.seat[2], side);
+      const gy = this.phys.groundHeight(d.x, d.z, PLAYER_R, v.y + 1.2);
+      if (this.phys.isFree(d.x, d.z, PLAYER_R, gy, gy + PLAYER_H, v)) return side;
+    }
+    return want;
+  }
+
+  /** The move has landed: actually sit down. */
+  private seatIn(v: Vehicle): void {
+    this.vehicle = v;
     this.hero.root.removeFromParent();
     v.bodyPivot.add(this.hero.root);
-    const seatDrop = v.kind === 'truck' ? 1.05 : v.kind === 'van' ? 1.05 : v.kind === 'suv' ? 1.02 : v.kind === 'sports' || v.kind === 'hyper' ? 0.94 : v.kind === 'rickshaw' ? 0.88 : 0.96;
-    this.hero.root.position.set(v.spec.seat[0], v.spec.seat[1] - seatDrop, v.spec.seat[2]);
+    this.hero.root.position.set(v.spec.seat[0], seatHeight(v), v.spec.seat[2]);
     this.hero.root.rotation.set(0, 0, 0);
+    this.audio.carDoorSlam();
     this.audio.engineOn();
-    this.audio.ui();
     setHud({ inVehicle: true, vehicleName: v.spec.name, vehicleClass: v.spec.cls.toUpperCase() });
   }
 
@@ -1235,17 +1416,21 @@ export class Game {
 
   private exitVehicle(): void {
     const v = this.vehicle!;
+    const held = this.models[this.weapon];
+    if (held) held.group.visible = true;
     this.releaseCar();
     // Bailing out at speed is allowed — it just hurts. Blocking it instead made E look
     // broken whenever you were moving.
     const bail = Math.abs(v.speed) > 9;
-    // look for a clear patch beside the car: left, right, then behind
+    // look for a clear patch beside the car: the door you are sitting at, then the other
+    // side, then the ends. Which side that is comes from where the seat actually is in
+    // the model, not from an assumption about which way round the country drives.
+    const side = driverSide(v.spec.seat[0]);
     const rx = rgtX(v.yaw), rz = rgtZ(v.yaw);
     const fx = fwdX(v.yaw), fz = fwdZ(v.yaw);
     const cands: [number, number][] = [
-      // driver's side first — right-hand drive, so that is the car's right
-      [v.x + rx * (v.spec.halfW + 0.9), v.z + rz * (v.spec.halfW + 0.9)],
-      [v.x - rx * (v.spec.halfW + 0.9), v.z - rz * (v.spec.halfW + 0.9)],
+      [v.x + rx * side * (v.spec.halfW + 0.9), v.z + rz * side * (v.spec.halfW + 0.9)],
+      [v.x - rx * side * (v.spec.halfW + 0.9), v.z - rz * side * (v.spec.halfW + 0.9)],
       [v.x - fx * (v.spec.halfL + 1.1), v.z - fz * (v.spec.halfL + 1.1)],
       [v.x + fx * (v.spec.halfL + 1.1), v.z + fz * (v.spec.halfL + 1.1)],
     ];
@@ -1257,9 +1442,14 @@ export class Game {
     this.hero.root.removeFromParent();
     this.scene.add(this.hero.root);
     this.hero.root.scale.setScalar(1);
-    this.px = spot[0];
-    this.pz = spot[1];
-    this.py = this.phys.groundHeight(this.px, this.pz, PLAYER_R, v.y + 1.5);
+    // Bailing out at speed throws you clear; stepping out starts from the seat and walks
+    // the rest, so the pavement is somewhere you arrive rather than somewhere you appear.
+    seatWorld(v, this.tmp2);
+    this.px = bail ? spot[0] : this.tmp2.x;
+    this.pz = bail ? spot[1] : this.tmp2.z;
+    this.py = bail
+      ? this.phys.groundHeight(spot[0], spot[1], PLAYER_R, v.y + 1.5)
+      : v.y + seatHeight(v);
     this.vx = 0; this.vz = 0; this.vy = 0;
     this.grounded = true;
     v.isPlayer = false;
@@ -1278,8 +1468,102 @@ export class Game {
       this.audio.land();
       this.damagePlayer(Math.min(32, (Math.abs(v.speed) - 9) * 2.2), v.x, v.z, false);
       this.toast('You bailed out!');
+    } else {
+      this.carMove = {
+        v, out: true, t: 0, side,
+        from: { x: this.px, y: this.py, z: this.pz, yaw: v.yaw, crouch: 0 },
+        spot: { x: spot[0], z: spot[1] },
+        stepT: 0,
+      };
+      this.audio.carDoorOpen();
     }
     setHud({ inVehicle: false, vehicleName: '', vehicleClass: '', speed: 0, boosting: false });
+  }
+
+  /**
+   * Drive one frame of getting in or out.
+   *
+   * The player is off the physics for the length of it — position comes straight from the
+   * curve in `carentry.ts` — but the camera and the animation carry on as normal, which
+   * is what stops it feeling like a cutscene.
+   */
+  private updateCarMove(dt: number, t: number): void {
+    const m = this.carMove;
+    if (!m) return;
+    const v = m.v;
+    m.t += dt;
+
+    // A car that goes up while you are climbing into it is not one you are getting into.
+    if (!m.out && v.health <= 0) { this.cancelCarMove(); return; }
+
+    // Nobody else is stepping this car — it is flagged as the player's but not being
+    // driven yet — so roll it to a stop under the door.
+    if (!m.out) {
+      stepVehicle(v, dt, this.phys);
+      updateVehicleBox(v);
+    }
+
+    const door = doorPoint(v.x, v.z, v.yaw, v.spec.halfW, v.spec.seat[2], m.side);
+    const groundY = this.phys.groundHeight(door.x, door.z, PLAYER_R, v.y + 1.6);
+    // seatWorld already carries the local-X-is-the-car's-left negation; do not re-derive it
+    seatWorld(v, this.tmp2);
+    const seat = { x: this.tmp2.x, y: v.y + seatHeight(v), z: this.tmp2.z };
+    const pose = m.out
+      ? exitPose(m.t, seat, door, groundY, m.spot, v.yaw, m.side)
+      : enterPose(m.t, m.from, door, groundY, seat, v.yaw, m.side, m.stepT);
+
+    this.px = pose.x; this.py = pose.y; this.pz = pose.z;
+    this.pyaw = pose.yaw;
+    this.vx = 0; this.vz = 0; this.vy = 0;
+    this.grounded = true;
+    this.speed = 0;
+
+    this.hero.root.position.set(this.px, this.py, this.pz);
+    this.hero.root.rotation.y = this.pyaw;
+    // The first leg is a walk; the second is a duck, and the crouch pose is what makes it
+    // read as climbing in rather than as being winched through the door.
+    const walking = m.out ? m.t >= CLIMB_OUT : m.t < m.stepT;
+    poseHumanoid(this.hero, {
+      dt, t, speed: walking ? 3.6 : 0, runSpeed: RUN_SPEED, grounded: true, airVy: 0,
+      aiming: false, aimPitch: 0, dead: 0, seated: false,
+      crouching: pose.crouch > 0.3,
+      punch: 0, flinch: this.flinch, steer: 0,
+      lookYaw: wrapPi(this.rig.yaw - this.pyaw),
+      lookPitch: this.rig.pitch - 0.24,
+    });
+    setHumanoidDetail(this.hero, true, this.preset.shadows);
+    this.rig.updateOnFoot(
+      this.camera, dt, this.px, this.py, this.pz,
+      false, 1, this.phys, this.settings, false,
+    );
+
+    if (m.t >= (m.out ? EXIT_TIME : enterTime(m.stepT))) {
+      this.carMove = null;
+      if (m.out) this.audio.carDoorSlam();
+      else this.seatIn(v);
+    }
+  }
+
+  /**
+   * Abandon a half-finished move — the car exploded, or the player died on the way in.
+   * Puts them on their feet at the door and gives the car back.
+   */
+  private cancelCarMove(): void {
+    const m = this.carMove;
+    if (!m) return;
+    this.carMove = null;
+    const v = m.v;
+    if (!m.out) {
+      v.isPlayer = false;
+      this.releaseCar();
+      const held = this.models[this.weapon];
+      if (held) held.group.visible = true;
+    }
+    const door = doorPoint(v.x, v.z, v.yaw, v.spec.halfW, v.spec.seat[2], m.side);
+    this.px = door.x;
+    this.pz = door.z;
+    this.py = this.phys.groundHeight(this.px, this.pz, PLAYER_R, v.y + 1.6);
+    this.hero.root.position.set(this.px, this.py, this.pz);
   }
 
   /* ── weapons ───────────────────────────────────────────────────────────── */
@@ -1300,11 +1584,25 @@ export class Game {
       const m = createWeaponModel(id);
       if (m) {
         this.models[id] = m;
-        this.hero.gunMount.add(m.group);
+        // A gun rides on the chest rather than at the end of an arm; holdWeapon then
+        // brings both hands to it. Blades really are held in a fist, and stay there.
+        (m.pocket ? this.hero.rifleMount : this.hero.gunMount).add(m.group);
       }
     }
     const m2 = this.models[id];
-    if (m2) m2.group.visible = true;
+    // Guns now ride on the body rather than in a fist, so a weapon that used to be
+    // hidden inside the car door is in plain view on the driver's chest. There is no
+    // drive-by in this game — updateWeapons returns early in a vehicle — so put it away.
+    if (m2) m2.group.visible = !this.vehicle;
+    // The off hand follows the weapon: nothing for fists and blades, the foregrip for a
+    // long gun, and for a pistol only once the shot is being steadied.
+    // init() picks a weapon before spawnPlayer() has built the hero, so this can run with
+    // no hero to hang it on; spawnPlayer re-applies it once there is one.
+    if (this.hero) {
+      this.hero.grip = m2 && m2.foregrip ? { at: m2.foregrip, atRest: m2.supportAtRest } : null;
+      this.hero.hold = m2 && m2.pocket ? m2.group : null;
+      if (m2 && m2.pocket) this.hero.pocket.copy(m2.pocket);
+    }
     if (!silent) this.audio.ui();
     setHud({ weapon: id, mag: this.mag[id], reserve: this.reserve[id] });
   }
@@ -1387,7 +1685,7 @@ export class Game {
       this.beginReload();
       return;
     }
-    this.mag[this.weapon]--;
+    if (!this.infiniteAmmo) this.mag[this.weapon]--;
     this.fireCd = 60 / spec.rpm;
     this.lastShotT = t;
     this.audio.gunshot(this.weapon);
@@ -1458,7 +1756,7 @@ export class Game {
         this.audio.bodyHit();
       } else if (hit.kind === 'vehicle' && hit.veh) {
         hitAny = true;
-        hit.veh.health -= spec.damage * 0.6;
+        if (!hit.veh.armoured) hit.veh.health -= spec.damage * 0.6;
         this.combat.impact(hit.x, hit.y, hit.z, hit.nx, hit.ny, hit.nz);
       } else if (hit.kind !== 'none') {
         this.combat.impact(hit.x, hit.y, hit.z, hit.nx, hit.ny, hit.nz);
@@ -1473,16 +1771,35 @@ export class Game {
     if (!killed) this.reportGunfire();
   }
 
+  /**
+   * A strike, and the combo it belongs to.
+   *
+   * Clicking used to fire the same right-handed jab at a fixed `60 / rpm` cadence, so
+   * hammering the button produced one animation on repeat and nothing chained. Now
+   * successive clicks inside a short window alternate hands and speed up, and the third
+   * lands noticeably harder — which is the whole rhythm of a GTA brawl. Let the window
+   * lapse and the combo resets.
+   */
   private melee(t: number): void {
     const spec = WEAPONS[this.weapon];
-    this.fireCd = 60 / spec.rpm;
+    const blade = this.weapon === 'knife' || this.weapon === 'sword';
+
+    this.combo = t - this.lastMeleeT < COMBO_WINDOW ? (this.combo + 1) % 3 : 0;
+    this.lastMeleeT = t;
+    const finisher = this.combo === 2;
+    // deliberately shorter than 60/rpm: a combo has to be able to chain faster than the
+    // weapon's nominal rate, or the second click lands after the first has finished
+    this.fireCd = finisher ? (blade ? 0.62 : 0.5) : blade ? 0.3 : 0.24;
     this.punchT = 0.4;
-    if (this.weapon === 'knife' || this.weapon === 'sword') {
-      this.audio.slash(this.weapon === 'sword');
-    } else {
-      this.audio.punch();
-    }
-    if (this.net.pvp && this.meleePlayer(spec.range, spec.damage)) return;
+    this.punchSide = this.combo === 1 ? -1 : 1;
+    this.punchSlash = blade;
+    this.rig.shake = Math.min(1, this.rig.shake + (finisher ? 0.16 : 0.05));
+
+    if (blade) this.audio.slash(this.weapon === 'sword' || finisher);
+    else this.audio.punch();
+
+    const damage = spec.damage * (finisher ? 1.85 : 1) * (this.ironFist ? 9 : 1);
+    if (this.net.pvp && this.meleePlayer(spec.range, damage)) return;
 
     let best: Ped | null = null;
     let bd = spec.range * spec.range;
@@ -1496,7 +1813,14 @@ export class Game {
       best = p;
     }
     if (!best) return;
-    const died = this.peds.damage(best, spec.damage, this.px, this.pz);
+    const died = this.peds.damage(best, damage, this.px, this.pz);
+    // a finisher actually moves them
+    if ((finisher || this.ironFist) && !died) {
+      best.state = 'flee';
+      best.fleeT = Math.max(best.fleeT, 6);
+      best.fleeFromX = this.px;
+      best.fleeFromZ = this.pz;
+    }
     this.combat.bloodBurst(
       best.x, best.y + 1.3, best.z,
       Math.sin(this.rig.yaw), 0.5, Math.cos(this.rig.yaw),
@@ -1535,7 +1859,7 @@ export class Game {
       const d = Math.hypot(v.x - ex, v.z - ez);
       if (d < radius) {
         const factor = 1 - d / radius;
-        v.health -= damage * factor * 0.75;
+        if (!v.armoured) v.health -= damage * factor * 0.75;
         if (d > 0.1) {
           v.vx += ((v.x - ex) / d) * 12 * factor;
           v.vz += ((v.z - ez) / d) * 12 * factor;
@@ -1591,15 +1915,26 @@ export class Game {
 
   /* ── police / wanted ──────────────────────────────────────────────────── */
 
-  /** Apply one offence. The curve and the tuning table both live in wanted.ts. */
+  /** Set the level and its target together. Every reset goes through here. */
+  private setWanted(v: number): void {
+    this.wanted = v;
+    this.wantedTarget = v;
+  }
+
+  /**
+   * Apply one offence. The curve and the tuning table both live in wanted.ts.
+   *
+   * Note this escalates the *target*, not the visible level: resistance is charged
+   * against how bad the police already think things are, so committing five crimes
+   * while the meter is still filling costs what five crimes should, rather than five
+   * times what the first one did.
+   */
   private addWanted(c: Crime): void {
     if (this.net.pvp) return;
-    const before = Math.floor(this.wanted);
-    const after = escalate(this.wanted, c);
-    if (after <= this.wanted) return;
-    this.wanted = after;
+    const after = escalate(this.wantedTarget, c);
+    if (after <= this.wantedTarget) return;
+    this.wantedTarget = after;
     this.wantedCool = 0;
-    if (Math.floor(this.wanted) > before) this.audio.wanted();
   }
 
   /**
@@ -1621,6 +1956,14 @@ export class Game {
 
   private updateHeat(dt: number): void {
     this.gunHeatT = Math.max(0, this.gunHeatT - dt);
+    // The meter fills towards where the crimes have put it. The chime belongs here, not
+    // in addWanted: the star is not real until it is on screen.
+    if (this.wantedTarget > this.wanted) {
+      const before = Math.floor(this.wanted);
+      this.wanted = riseTowards(this.wanted, this.wantedTarget, dt);
+      if (Math.floor(this.wanted) > before) this.audio.wanted();
+    }
+
     if (this.wanted > 0) {
       const seen = this.peds.nearestAlive(this.px, this.pz, 45, true);
       let visible = false;
@@ -1629,9 +1972,9 @@ export class Game {
       }
       this.wantedCool = visible ? 0 : this.wantedCool + dt;
       if (this.wantedCool > 14) {
-        this.wanted = Math.max(0, this.wanted - dt * 0.16);
+        this.setWanted(Math.max(0, this.wanted - dt * 0.16));
         if (this.wanted < 0.05) {
-          this.wanted = 0;
+          this.setWanted(0);
           this.peds.removeCops();
           for (const v of [...this.traffic.cars]) if (v.siren && !v.isPlayer) this.traffic.remove(v);
           this.ops.clear();
@@ -1784,7 +2127,7 @@ export class Game {
 
   private busted(): void {
     this.bustedT = 0;
-    this.wanted = 0;
+    this.setWanted(0);
     this.peds.removeCops();
     for (const v of [...this.traffic.cars]) if (v.siren && !v.isPlayer) this.traffic.remove(v);
     this.ops.clear();
@@ -1817,7 +2160,7 @@ export class Game {
     this.money = Math.max(0, this.money - cost);
     this.health = 100;
     this.armour = 0;
-    this.wanted = 0;
+    this.setWanted(0);
     this.dead = false;
     this.deadT = 0;
     this.crouching = false;
@@ -1850,7 +2193,7 @@ export class Game {
   private respawnInMatch(): void {
     this.health = 100;
     this.armour = 0;
-    this.wanted = 0;
+    this.setWanted(0);
     this.dead = false;
     this.deadT = 0;
     this.crouching = false;
@@ -2023,6 +2366,12 @@ export class Game {
   private updateInteraction(): void {
     this.promptAction = null;
     let text = '';
+    // Mid-move: no prompt, and no way to press E again and start a second one.
+    if (this.carMove) {
+      if (this.prompt !== '') { this.prompt = ''; setHud({ prompt: '' }); }
+      this.input.consume('use');
+      return;
+    }
     // Sitting in a taxi, a cruiser or an ambulance: say so, rather than making the job
     // key something you have to read the manual to find.
     const jv = this.vehicle;
@@ -2040,7 +2389,16 @@ export class Game {
       }
     }
 
-    if (this.vehicle) {
+    if (this.interior) {
+      const stand = nearestStand(this.interior.it, this.px, this.pz);
+      if (stand) {
+        text = `E — ${this.standLabel(stand)}`;
+        this.promptAction = () => this.useStand(stand);
+      } else if (this.interior.grace <= 0 && atDoor(this.interior.it, this.px, this.pz)) {
+        text = 'E — step outside';
+        this.promptAction = () => this.leaveInterior();
+      }
+    } else if (this.vehicle) {
       text = 'E — get out';
     } else if (!this.dead) {
       const v = this.traffic.nearest(this.px, this.pz, 3.6);
@@ -2054,8 +2412,11 @@ export class Game {
           ? () => this.hijackVehicle(v)
           : () => this.enterVehicle(v);
       } else if (shop) {
-        text = `E — ${shop.name} (Shop & Ammo)`;
-        this.promptAction = () => this.openShop(shop.name);
+        text = `E — go into ${shop.name}`;
+        this.promptAction = () => this.enterInterior(shop.kind, shop.name);
+      } else if (dist2(this.city.playerStart.x, this.city.playerStart.z, this.px, this.pz) < 3.2 * 3.2) {
+        text = 'E — go inside';
+        this.promptAction = () => this.enterInterior('home', 'HOME');
       }
     }
 
@@ -2068,6 +2429,176 @@ export class Game {
       this.prompt = text;
       setHud({ prompt: text });
     }
+  }
+
+  /**
+   * Go to black, do the thing, come back.
+   *
+   * The swap happens at the halfway point, so the player never sees the room appear
+   * around them — which, without it, is exactly what a teleport looks like.
+   */
+  private beginFade(go: () => void): void {
+    if (this.fadeT > 0) return;
+    this.fadeDur = 0.62;
+    this.fadeT = this.fadeDur;
+    this.fadeGo = go;
+  }
+
+  private updateFade(dt: number): void {
+    if (this.fadeT <= 0) return;
+    this.fadeT -= dt;
+    const half = this.fadeDur / 2;
+    if (this.fadeGo && this.fadeT <= half) { this.fadeGo(); this.fadeGo = null; }
+    const k = this.fadeT > half
+      ? (this.fadeDur - this.fadeT) / half
+      : Math.max(0, this.fadeT) / half;
+    setHud({ fade: clamp(k, 0, 1) });
+    if (this.fadeT <= 0) { this.fadeT = 0; setHud({ fade: 0 }); }
+  }
+
+  /**
+   * Where the player is *as far as the city is concerned*.
+   *
+   * Indoors that is the doorway they came in through, not the room six kilometres away.
+   * The minimap and the police both want this one; the camera and the collision want the
+   * real position.
+   */
+  private worldX(): number { return this.interior ? this.interior.outX : this.px; }
+  private worldZ(): number { return this.interior ? this.interior.outZ : this.pz; }
+
+  /** Walk into a room. Builds it the first time anyone opens that particular door. */
+  private enterInterior(kind: InteriorKind, name: string): void {
+    if (this.interior || this.vehicle || this.carMove) return;
+    let it = this.interiors.get(kind);
+    if (!it) {
+      it = buildInterior(kind, this.mats, this.phys, this.scene);
+      this.interiors.set(kind, it);
+    }
+    const room = it;
+    const outX = this.px, outZ = this.pz, outYaw = this.pyaw;
+    this.beginFade(() => {
+      this.interior = { it: room, outX, outZ, outYaw, name, grace: 0.7 };
+      this.px = room.entry.x;
+      this.pz = room.entry.z;
+      this.py = room.y;
+      this.pyaw = room.entry.yaw;
+      this.rig.yaw = room.entry.yaw;
+      this.rig.pitch = 0;
+      this.vx = 0; this.vz = 0; this.vy = 0;
+      this.grounded = true;
+      this.audio.carDoorOpen();
+      setHud({ interior: name });
+    });
+  }
+
+  /** Back out onto the pavement, where you were standing. */
+  private leaveInterior(): void {
+    const inside = this.interior;
+    if (!inside || this.fadeT > 0) return;
+    this.beginFade(() => {
+      this.interior = null;
+      this.px = inside.outX;
+      this.pz = inside.outZ;
+      this.py = this.phys.groundHeight(this.px, this.pz, PLAYER_R, 40);
+      this.pyaw = inside.outYaw;
+      this.rig.yaw = inside.outYaw;
+      this.vx = 0; this.vz = 0; this.vy = 0;
+      this.grounded = true;
+      this.audio.carDoorSlam();
+      setHud({ interior: '' });
+    });
+  }
+
+  /** The prompt for one stand, with a live price where there is one worth reading. */
+  private standLabel(s: Stand): string {
+    if (s.action === 'ammo') {
+      const spec = WEAPONS[s.arg as WeaponId];
+      return `buy ${spec.ammoPack} ${spec.name} rounds (Rs.${spec.priceAmmo})`;
+    }
+    if (s.action === 'armour') return this.armour >= 100 ? 'body armour (full)' : 'buy body armour (Rs.100)';
+    if (s.action === 'health') return this.health >= 100 ? `${s.label} (not hurt)` : `${s.label} (Rs.50)`;
+    if (s.action === 'eat') return this.health >= 100 ? 'the fridge is for later' : 'eat something';
+    return s.label;
+  }
+
+  /**
+   * Use whatever you are stood in front of.
+   *
+   * Everything here routes to a method that already existed for the old full-screen shop
+   * menu — the interiors change where you buy, not what buying does — except for the four
+   * things you can only do at home.
+   */
+  private useStand(s: Stand): void {
+    switch (s.action) {
+      case 'ammo': this.buyAmmo(s.arg as WeaponId); break;
+      case 'armour': this.buyArmour(); break;
+      case 'health': this.buyHealth(); break;
+      case 'menu': this.openShop(this.interior?.name ?? 'AMMU-NATION'); break;
+      case 'sleep': this.sleepAtHome(); break;
+      case 'eat':
+        if (this.health >= 100) { this.audio.deny(); break; }
+        this.health = Math.min(100, this.health + 35);
+        this.audio.purchase();
+        this.toast('Leftovers. +35 health');
+        setHud({ health: this.health });
+        break;
+      case 'wardrobe': this.changeOutfit(); break;
+      case 'tv':
+        this.audio.ui();
+        this.toast(pick(this.rng, [
+          'The news is about the traffic on the canal bridge.',
+          'A cricket highlights reel. Somebody drops a catch.',
+          'An advert for a supermarket you have definitely robbed.',
+          'The weather: hot, then hotter, then dust.',
+        ]));
+        break;
+    }
+  }
+
+  /**
+   * Sleep. Skips to eight in the morning, patches you up, and — this being the point of
+   * having a bed in a GTA — is the one place the police give up on you for free.
+   */
+  private sleepAtHome(): void {
+    this.beginFade(() => {
+      this.startHour = 8;
+      this.sky.setHour(8);
+      this.health = 100;
+      this.setWanted(0);
+      this.peds.removeCops();
+      this.ops.clear();
+      this.audio.sirenOff();
+      this.toast('Slept until morning. Health restored, and nobody is looking for you.');
+      setHud({ health: this.health, wanted: 0 });
+    });
+  }
+
+  /**
+   * A different shirt.
+   *
+   * The colour is baked into the model — vertex colours on the capsule rig, a material
+   * tint on the mannequin — so the only honest way to change it is to build a new one.
+   * Whatever is being carried has to be re-hung on the new body afterwards, which is what
+   * the re-parent loop is for.
+   */
+  private changeOutfit(): void {
+    const shirt = OUTFITS[(this.outfitIdx = (this.outfitIdx + 1) % OUTFITS.length)];
+    const old = this.hero;
+    this.hero = createHumanoid({
+      skin: SKINS[1], shirt, pants: shade(shirt, 0.88), hair: 0x1d130c, shoes: 0xb3352a, scale: 1,
+    });
+    this.hero.root.position.copy(old.root.position);
+    this.hero.root.rotation.y = old.root.rotation.y;
+    this.scene.add(this.hero.root);
+    for (const id of WEAPON_ORDER) {
+      const mdl = this.models[id];
+      if (!mdl) continue;
+      (mdl.pocket ? this.hero.rifleMount : this.hero.gunMount).add(mdl.group);
+    }
+    disposeHumanoid(old);
+    this.setWeapon(this.weapon, true);
+    this.audio.ui();
+    this.toast('Changed your shirt');
   }
 
   private nearestShop(): Shop | null {
@@ -2196,6 +2727,20 @@ export class Game {
     { codes: ['SCATTERSTORM', 'MAKEITRAIN'], label: 'MONSOON', hint: 'bring the rain' },
     { codes: ['ANDYELLOWSKY', 'DUSTUP'], label: 'DUST HAZE', hint: 'bring the dust' },
     { codes: ['BLUESKIES', 'CLEARUP'], label: 'CLEAR SKIES', hint: 'clear the weather' },
+    { codes: ['BULLETTIME', 'SLOWMO'], label: 'BULLET TIME', hint: 'slow the world down' },
+    { codes: ['MOONJUMP', 'CHANDPAR'], label: 'MOON JUMP', hint: 'jump over a house' },
+    { codes: ['INFINITEAMMO', 'NORELOAD'], label: 'INFINITE AMMO', hint: 'never reload again' },
+    { codes: ['IRONFIST', 'SUPERPUNCH'], label: 'IRON FIST', hint: 'one-punch anybody' },
+    { codes: ['STUNTMAN', 'ARMOURPLATE'], label: 'ARMOURED CAR', hint: 'your car stops breaking' },
+    { codes: ['RIOTACT', 'EVERYONEHATESYOU'], label: 'RIOT', hint: 'turn the whole street on you' },
+    { codes: ['CLEARTHEROAD', 'NOTRAFFIC'], label: 'ROAD CLEARED', hint: 'empty the streets' },
+    { codes: ['RUSHHOUR', 'TRAFFICJAM'], label: 'RUSH HOUR', hint: 'fill the streets' },
+    { codes: ['RANGBIRANGI', 'PIMPMYRIDE'], label: 'REPAINTED', hint: 'repaint every car in sight' },
+    { codes: ['CHINGCHI', 'GIVERICKSHAW'], label: 'RICKSHAW SPAWNED', hint: 'spawn a rickshaw' },
+    { codes: ['CARRYDABA', 'GIVEBOLAN'], label: 'CARRY DABA SPAWNED', hint: 'spawn a Carry Daba' },
+    { codes: ['BEDFORDBLUES', 'GIVETRUCK'], label: 'BEDFORD TRUCK SPAWNED', hint: 'spawn a painted truck' },
+    { codes: ['RAATHOGAYI', 'MIDNIGHT'], label: 'MIDNIGHT', hint: 'set the clock to 00:00' },
+    { codes: ['DOPEHER', 'HIGHNOON'], label: 'HIGH NOON', hint: 'set the clock to 12:00' },
   ];
 
   /** The list the console shows when you have not typed anything yet. */
@@ -2237,7 +2782,7 @@ export class Game {
         }
         break;
       case 'LEAVEMEALONE':
-        this.wanted = 0;
+        this.setWanted(0);
         this.wantedCool = 0;
         this.peds.removeCops();
         for (const c of [...this.traffic.cars]) if (c.siren && !c.isPlayer) this.traffic.remove(c);
@@ -2245,7 +2790,8 @@ export class Game {
         this.audio.sirenOff();
         break;
       case 'BRINGITON':
-        this.wanted = 5;
+        // A cheat is instant: set the visible level, not just the target.
+        this.setWanted(5);
         // Zero, not a large number: wantedCool counts *up* towards losing the police, so
         // the old value made the cheat start shedding stars the instant it was used.
         this.wantedCool = 0;
@@ -2281,6 +2827,67 @@ export class Game {
       case 'WALKONWATER':
         this.waterproof = !this.waterproof;
         label = `DROWNING ${this.waterproof ? 'DISABLED' : 'ENABLED'}`;
+        break;
+      case 'BULLETTIME':
+        this.timeScale = this.timeScale === 1 ? 0.38 : 1;
+        label = `BULLET TIME ${this.timeScale === 1 ? 'OFF' : 'ON'}`;
+        break;
+      case 'MOONJUMP':
+        this.lowGrav = !this.lowGrav;
+        label = `MOON JUMP ${this.lowGrav ? 'ON' : 'OFF'}`;
+        break;
+      case 'INFINITEAMMO':
+        this.infiniteAmmo = !this.infiniteAmmo;
+        label = `INFINITE AMMO ${this.infiniteAmmo ? 'ON' : 'OFF'}`;
+        break;
+      case 'IRONFIST':
+        this.ironFist = !this.ironFist;
+        label = `IRON FIST ${this.ironFist ? 'ON' : 'OFF'}`;
+        break;
+      case 'STUNTMAN': {
+        // Applies to every car you get into from here on, not just the one you are in.
+        this.carArmour = !this.carArmour;
+        for (const v of this.traffic.cars) if (v.isPlayer) v.armoured = this.carArmour;
+        if (this.vehicle) this.vehicle.armoured = this.carArmour;
+        label = `ARMOURED CAR ${this.carArmour ? 'ON' : 'OFF'}`;
+        break;
+      }
+      case 'RIOTACT': {
+        let n = 0;
+        for (const p of this.peds.peds) {
+          if (p.cop || p.state === 'dead') continue;
+          if (dist2(p.x, p.z, this.px, this.pz) > 60 * 60) continue;
+          this.peds.provoke(p, this.px, this.pz, 1);
+          n++;
+        }
+        label = n ? `RIOT — ${n} ANGRY LOCALS` : 'NOBODY AROUND TO RIOT';
+        break;
+      }
+      case 'CLEARTHEROAD':
+        for (const v of [...this.traffic.cars]) {
+          if (v.isPlayer || v === this.vehicle) continue;
+          this.traffic.remove(v);
+        }
+        break;
+      case 'RUSHHOUR':
+        this.traffic.resizeLanes(MAX_SYNC_CARS);
+        break;
+      case 'RANGBIRANGI': {
+        let n = 0;
+        for (const v of this.traffic.cars) {
+          if (dist2(v.x, v.z, this.px, this.pz) > 90 * 90) continue;
+          paintVehicle(v, CHEAT_PAINT[(n++) % CHEAT_PAINT.length]);
+        }
+        label = `REPAINTED ${n} CARS`;
+        break;
+      }
+      case 'CHINGCHI': this.spawnCheatVehicle('rickshaw'); break;
+      case 'CARRYDABA': this.spawnCheatVehicle('carry'); break;
+      case 'BEDFORDBLUES': this.spawnCheatVehicle('truck'); break;
+      case 'RAATHOGAYI':
+      case 'DOPEHER':
+        this.startHour = entry.codes[0] === 'DOPEHER' ? 12 : 0;
+        this.sky.setHour(this.startHour);
         break;
       case 'TAKEMETOSPRAY': {
         // Just outside the bay, facing in, so the warp lands you on the forecourt rather
@@ -2415,7 +3022,7 @@ export class Game {
       paintVehicle(v, colour.hex);
       const hadHeat = this.wanted > 0;
       if (hadHeat) {
-        this.wanted = 0;
+        this.setWanted(0);
         this.wantedCool = 0;
         this.peds.removeCops();
         for (const c of [...this.traffic.cars]) if (c.siren && !c.isPlayer) this.traffic.remove(c);
@@ -2426,6 +3033,51 @@ export class Game {
       this.toast(`Resprayed ${colour.name}${hadHeat ? ' · heat cleared' : ''}`);
       setHud({ wanted: this.wanted });
       return;
+    }
+  }
+
+  /* ── wrecks ────────────────────────────────────────────── */
+
+  /**
+   * Cars that have taken enough of a beating catch fire and then go up.
+   *
+   * Nothing used to happen at all: collision damage and bullets both drove `health` down
+   * and *nothing read it*, so a car could be rammed into a wall all day and drive off.
+   * Now zero health kills the engine, black smoke pours out, and a few seconds later it
+   * explodes — with the blast hurting whoever is standing near it, including the player
+   * who is still sitting in the driving seat if they leave it too late.
+   */
+  private updateWrecks(dt: number): void {
+    const cars = this.traffic.cars;
+    for (let i = cars.length - 1; i >= 0; i--) {
+      const v = cars[i];
+      if (v.health > 0) {
+        // a badly damaged car smokes without being written off yet
+        if (v.health < 34 && this.rng() < 0.5) {
+          this.combat.engineSmoke(v.x, v.y + 0.85, v.z, false);
+        }
+        continue;
+      }
+      if (v.burnT <= 0) {
+        v.burnT = 3.4 + this.rng() * 2.2;
+        v.siren = false;
+        if (v === this.vehicle) this.toast('The engine is on fire — get out!');
+        else if (dist2(v.x, v.z, this.px, this.pz) < 60 * 60) this.audio.crash(9);
+      }
+      v.burnT -= dt;
+      this.combat.engineSmoke(v.x, v.y + 0.85, v.z, true);
+      if (v.burnT > 0) continue;
+
+      // and up it goes
+      const wasMine = v === this.vehicle;
+      if (wasMine) this.exitVehicle();
+      this.combat.explode(v.x, v.y + 0.6, v.z, 150, 8.5);
+      this.audio.explosion();
+      this.peds.panic(v.x, v.z, 34, 8);
+      if (dist2(v.x, v.z, this.px, this.pz) < 40 * 40) {
+        this.rig.shake = Math.min(1.4, this.rig.shake + 0.8);
+      }
+      this.traffic.remove(v);
     }
   }
 
@@ -2558,7 +3210,7 @@ export class Game {
       this.buildEnts();
       if (this.radarCanvas) {
         const ctx = this.radarCanvas.getContext('2d');
-        if (ctx) this.mapR.drawRadar(ctx, this.radarCanvas.width, this.px, this.pz, this.rig.yaw, this.ents);
+        if (ctx) this.mapR.drawRadar(ctx, this.radarCanvas.width, this.worldX(), this.worldZ(), this.rig.yaw, this.ents);
       }
       if (this.mapOpen) this.drawMap();
     }
@@ -2628,7 +3280,7 @@ export class Game {
     if (!this.mapCanvas) return;
     const ctx = this.mapCanvas.getContext('2d');
     if (!ctx) return;
-    this.mapR.drawFull(ctx, this.mapCanvas.width, this.mapCanvas.height, this.px, this.pz, this.rig.yaw, this.ents, this.waypoint);
+    this.mapR.drawFull(ctx, this.mapCanvas.width, this.mapCanvas.height, this.worldX(), this.worldZ(), this.rig.yaw, this.ents, this.waypoint);
   }
 
   /** Used by the pause menu so settings changes are audible/visible immediately. */

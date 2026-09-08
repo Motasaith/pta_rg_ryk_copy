@@ -35,8 +35,11 @@ const PROGRESS_MIN = 2;
 // Weighted by how common each is on the street: mostly ordinary cars, the odd fast one,
 // and a hypercar you will occasionally find parked and be very pleased about.
 const CIVILIAN: VehKind[] = [
-  'sedan', 'hatch', 'suv', 'van', 'rickshaw', 'sedan', 'hatch', 'suv',
-  'sedan', 'hatch', 'rickshaw', 'van', 'muscle', 'sports', 'truck', 'hyper',
+  // The Carry Daba earns three slots out of eighteen. On a real street in Rahim Yar Khan
+  // it would earn more than that, but the traffic also has to be worth stealing.
+  'sedan', 'hatch', 'carry', 'van', 'rickshaw', 'sedan', 'carry', 'suv',
+  'sedan', 'hatch', 'rickshaw', 'carry', 'muscle', 'sports', 'truck', 'hyper',
+  'hatch', 'suv',
 ];
 
 /**
@@ -484,6 +487,7 @@ export class Traffic {
     placeVehicle(v, this.tmp.x, this.tmp.z, Math.atan2(to.x - from.x, to.z - from.z));
     lane.stuck = 0; lane.ct = 0; lane.cx = this.tmp.x; lane.cz = this.tmp.z;
     v.health = 100;
+    v.burnT = 0;
   }
 
   /**

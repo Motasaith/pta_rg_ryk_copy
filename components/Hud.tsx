@@ -212,9 +212,18 @@ function CheatConsole({ hints, onSubmit, onClose }: {
     ref.current?.focus();
   }, []);
 
-  const matches = text.trim()
-    ? hints.filter((h) => h.code.startsWith(text.trim().toUpperCase())).slice(0, 6)
-    : hints.slice(0, 6);
+  /**
+   * Search the descriptions, not just the codes.
+   *
+   * With eighteen cheats a prefix match on the code was enough. With thirty-one it is
+   * not: nobody can prefix-match a code they have never seen, so the list became six
+   * cheats and a wall. Typing "car", "police" or "rain" now finds them by what they do.
+   */
+  const q = text.trim().toUpperCase();
+  const found = q
+    ? hints.filter((h) => h.code.startsWith(q) || h.hint.toUpperCase().includes(q))
+    : hints;
+  const matches = found.slice(0, 7);
 
   return (
     <div className="cheatconsole">
@@ -230,6 +239,10 @@ function CheatConsole({ hints, onSubmit, onClose }: {
             <span>{h.hint}</span>
           </button>
         ))}
+        {found.length > matches.length && (
+          <div className="cheatmore">{found.length - matches.length} more — keep typing</div>
+        )}
+        {!found.length && <div className="cheatmore">no cheat matches “{text.trim()}”</div>}
       </div>
       <div className="cheatinput">
         <span className="caret">&gt;</span>
@@ -238,7 +251,7 @@ function CheatConsole({ hints, onSubmit, onClose }: {
           value={text}
           spellCheck={false}
           autoComplete="off"
-          placeholder="type a cheat and press ENTER"
+          placeholder={`type a cheat or what you want (${hints.length} of them)`}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             e.stopPropagation();

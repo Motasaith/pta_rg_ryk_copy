@@ -366,9 +366,14 @@ console.log('\ncombat');
   ok(Math.abs(target.h.tilt.rotation.x) > 1.2, 'the body ends up flat on the ground', `x=${target.h.tilt.rotation.x.toFixed(2)}`);
 
   const alive = peds.peds.find((q) => q.state !== 'dead');
+  // Count who is actually within earshot first: asserting a bare number here made the
+  // test a hostage of wherever the crowd happened to spawn on this particular seed.
+  const earshot = peds.peds.filter((p) => p.state !== 'dead' && !p.cop
+    && Math.hypot(p.x - alive.x, p.z - alive.z) <= 40);
   peds.panic(alive.x, alive.z, 40, 5);
-  const fleeing = peds.peds.filter((p) => p.state === 'flee').length;
-  ok(fleeing > 3, `${fleeing} bystanders panicked at the gunfire`);
+  ok(earshot.length > 1, `${earshot.length} bystanders were within earshot`);
+  ok(earshot.every((p) => p.state === 'flee'), 'every one of them ran');
+  ok(!peds.peds.some((p) => p.cop && p.state === 'flee'), 'the police do not run from gunfire');
 }
 
 /* -- police -------------------------------------------------------------- */
@@ -389,7 +394,15 @@ console.log('\npolice');
   const swat = peds.spawnPed(true, rx + 4, rz + 16, true);
   ok(swat.swat && swat.cop, 'a SWAT enforcer is still a cop');
   ok(swat.health > cop.health, `and takes far more killing (${swat.health} vs ${cop.health})`);
-  ok(swat.h.gunMount.children.length > 0, 'and turns up carrying a rifle');
+  // The rifle hangs on the chest, not off a fist: a shouldered weapon is the only way
+  // both hands can reach it, since an AK's handguard is further from the left shoulder
+  // than an arm is long.
+  ok(swat.h.rifleMount.children.length > 0, 'and turns up carrying a rifle, shouldered');
+  ok(swat.h.gunMount.children.length === 0, 'rather than dangling off one hand');
+  ok(!!swat.h.grip && !!swat.h.hold, 'with both hands assigned to it');
+  const beat = peds.peds.find((q) => q.cop && !q.swat);
+  ok(beat && beat.h.hold && beat.h.grip && !beat.h.grip.atRest,
+    'a beat officer carries his pistol in one hand until he raises it');
   ok(swat.h.meshes.some((m) => m.geometry), 'the armoured look reuses the same humanoid rig');
 }
 
@@ -777,7 +790,7 @@ console.log('\nhandling: cornering radius and drift');
 console.log('\nwanted level escalation');
 {
   const W = await import('./wanted.js');
-  const { CRIME, escalate, crimesToReach } = W;
+  const { CRIME, escalate, crimesToReach, riseTowards, RISE_RATE } = W;
 
   // The complaint: a stray bullet was worth a star. It used to add 0.34 per shot fired,
   // hit or miss, witness or not — three rounds into an empty sky and the police arrived.
@@ -791,14 +804,16 @@ console.log('\nwanted level escalation');
   // Killing civilians is serious, but it is not a five-star manhunt.
   ok(crimesToReach(CRIME.civilianKilled, 5) === Infinity,
     'no number of dead civilians summons the helicopter');
-  ok(crimesToReach(CRIME.civilianKilled, 3) >= 6,
+  ok(crimesToReach(CRIME.civilianKilled, 3) >= 12,
     `${crimesToReach(CRIME.civilianKilled, 3)} of them to reach three stars`);
 
-  // Only the police, and only slowly. One officer used to be an instant two stars.
+  // Only the police, and only slowly. One officer used to be an instant two stars, then
+  // an instant 1.2; it now takes two of them to buy the first star at all.
   const one = escalate(0, CRIME.officerKilled);
-  ok(one > 1 && one < 1.5, `one dead officer is ${one.toFixed(2)} stars (was 2.5)`);
+  ok(one < 1, `one dead officer is ${one.toFixed(2)} stars, not a star yet (was 2.5)`);
+  ok(crimesToReach(CRIME.officerKilled, 1) === 2, 'two of them for the first star');
   const toFive = crimesToReach(CRIME.officerKilled, 5);
-  ok(toFive >= 10, `and it takes ${toFive} of them to reach five (was two)`);
+  ok(toFive >= 20, `and it takes ${toFive} of them to reach five (was two, then fifteen)`);
 
   // The mechanism behind all of it: every star costs more than the last.
   const first = escalate(0, CRIME.explosion) - 0;
@@ -806,6 +821,18 @@ console.log('\nwanted level escalation');
   ok(fourth < first * 0.5,
     `the same crime is worth ${first.toFixed(2)} stars when clear and only `
     + `${fourth.toFixed(2)} at three stars`);
+
+  /* The second half of "the police take time": the meter fills, it does not jump. Two
+     officers shot in the same second used to be two stars in the same second. */
+  ok(riseTowards(0, 5, 1 / 60) < 0.01,
+    'a five-star target does not put five stars on the screen in one frame');
+  let shown = 0, secs = 0;
+  while (shown < 5 - 1e-9 && secs < 60) { shown = riseTowards(shown, 5, 1 / 60); secs += 1 / 60; }
+  ok(secs > 9 && secs < 11,
+    `the worst rampage in the game still needs ${secs.toFixed(1)}s before the helicopter `
+    + 'is in the air, instead of arriving with the first magazine');
+  ok(Math.abs(riseTowards(0, 5, 1) - RISE_RATE) < 1e-9, `half a star a second (${RISE_RATE})`);
+  ok(riseTowards(2.4, 1.0, 1) === 2.4, 'and it only ever fills — cooling off is a separate job');
 
   // A ceiling never *reduces* the heat you already have from something worse.
   const hot = escalate(4.2, CRIME.brawl);

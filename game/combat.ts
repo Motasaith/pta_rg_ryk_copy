@@ -408,6 +408,18 @@ export class Combat {
     (d.mesh.material as THREE.MeshBasicMaterial).opacity = 0.9;
   }
 
+  /**
+   * A wrecked engine venting. Two particles a call, so it can be driven every frame from
+   * every burning car in the street without thinking about it.
+   */
+  engineSmoke(x: number, y: number, z: number, burning: boolean): void {
+    const spread = () => (Math.random() - 0.5) * 0.7;
+    this.smoke.emit(x + spread(), y, z + spread(), spread(), 1.4 + Math.random(), spread(), 1.9);
+    if (!burning) return;
+    this.fire.emit(x + spread() * 0.5, y, z + spread() * 0.5,
+      spread() * 0.6, 1.9 + Math.random(), spread() * 0.6, 0.5);
+  }
+
   scorchMark(x: number, y: number, z: number, size = 3.5): void {
     const d = this.decals[this.decalHead];
     this.decalHead = (this.decalHead + 1) % this.decals.length;

@@ -106,19 +106,53 @@ export class Physics {
     this.grid.clear();
     this.stamp = new Int32Array(this.boxes.length);
     this.mark = 1;
-    for (let i = 0; i < this.boxes.length; i++) {
-      const b = this.boxes[i];
-      const x0 = Math.floor(b.minX / this.cs), x1 = Math.floor(b.maxX / this.cs);
-      const z0 = Math.floor(b.minZ / this.cs), z1 = Math.floor(b.maxZ / this.cs);
-      for (let cx = x0; cx <= x1; cx++) {
-        for (let cz = z0; cz <= z1; cz++) {
-          const k = this.key(cx, cz);
-          let cell = this.grid.get(k);
-          if (!cell) this.grid.set(k, (cell = []));
-          cell.push(i);
-        }
+    for (let i = 0; i < this.boxes.length; i++) this.index(i);
+  }
+
+  /** Stitch one box into the cells it covers. */
+  private index(i: number): void {
+    const b = this.boxes[i];
+    const x0 = Math.floor(b.minX / this.cs), x1 = Math.floor(b.maxX / this.cs);
+    const z0 = Math.floor(b.minZ / this.cs), z1 = Math.floor(b.maxZ / this.cs);
+    for (let cx = x0; cx <= x1; cx++) {
+      for (let cz = z0; cz <= z1; cz++) {
+        const k = this.key(cx, cz);
+        let cell = this.grid.get(k);
+        if (!cell) this.grid.set(k, (cell = []));
+        cell.push(i);
       }
     }
+  }
+
+  /**
+   * Add a collider *after* `build()` has already hashed the world, and index it there and
+   * then.
+   *
+   * Interiors are built the first time somebody opens their door, which is minutes after
+   * the city was hashed. Colliders added with plain `addBox` at that point are in the box
+   * list but in no cell, so `query` never returns them: the walls are not there, the floor
+   * is not there, and the room quietly stops existing to everything except the renderer.
+   * Re-running `build()` would work and would walk every collider in the map to do it.
+   */
+  addLate(
+    minX: number, minZ: number, maxX: number, maxZ: number,
+    bottom: number, top: number, kind: Kind = KIND.Building,
+  ): Box {
+    const b = this.addBox(minX, minZ, maxX, maxZ, bottom, top, kind);
+    if (this.stamp.length < this.boxes.length) {
+      const grown = new Int32Array(this.boxes.length + 128);
+      grown.set(this.stamp);
+      this.stamp = grown;
+    }
+    this.index(this.boxes.length - 1);
+    return b;
+  }
+
+  /** `addCentered`, for a collider arriving after the world was hashed. */
+  addLateCentered(
+    cx: number, cz: number, hx: number, hz: number, bottom: number, top: number, kind: Kind = KIND.Building,
+  ): Box {
+    return this.addLate(cx - hx, cz - hz, cx + hx, cz + hz, bottom, top, kind);
   }
 
   private key(cx: number, cz: number): number {

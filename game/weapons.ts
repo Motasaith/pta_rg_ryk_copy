@@ -171,7 +171,61 @@ function cy(
 export interface WeaponModel {
   group: THREE.Group;
   muzzle: THREE.Object3D;
+  /**
+   * Where the support hand grips it. Null for anything genuinely held in one hand, and
+   * the reason a rifle now looks held rather than welded to a fist: `ik.ts` solves the
+   * left arm onto this point every frame.
+   */
+  foregrip: THREE.Object3D | null;
+  /**
+   * Where the weapon hangs on the chest, or null for a blade, which really is held at
+   * the end of an arm. See RIFLE_POCKET in humanoid.ts for why guns are not.
+   */
+  pocket: THREE.Vector3 | null;
+  /** Both hands on it even at rest, or only when steadying a shot (a pistol). */
+  supportAtRest: boolean;
 }
+
+/**
+ * The support hand, per weapon, in weapon space — origin at the firing grip, barrel down
+ * +Z, sights up +Y, exactly as the models below are built.
+ *
+ * These are not guesses: each one is read off the part the hand would actually be on —
+ * the SMG's tactical foregrip at z=0.19, the AK's wooden handguard at z=0.26, the
+ * shotgun's pump slide at z=0.36 — offset down to the centre of a closed fist.
+ */
+type Grip = {
+  /** support hand, in weapon space */
+  at: [number, number, number];
+  /** where the weapon itself sits, in chest space */
+  pocket: [number, number, number];
+  /** both hands on it even at rest, rather than only when steadying a shot */
+  atRest: boolean;
+};
+
+/**
+ * Every gun's two hands, and where the gun itself rides.
+ *
+ * `pocket` is in character space — metres above the feet, on a 1.78m character, facing
+ * +Z. These are not decoration: they are what makes the hands reachable. An arm here is
+ * 0.58m; the shotgun's pump slide sits 0.36m down the barrel, so parked at arm's length
+ * the support hand needed 0.66m of arm and simply hung in the air near it. Each pocket is
+ * chosen so both hands are comfortably inside that budget, which the test in
+ * `tests/world.test.mjs` checks for all seven guns.
+ */
+const GRIP: Partial<Record<WeaponId, Grip>> = {
+  // a pistol is punched out in front of the chest and cupped with the off hand only once
+  // the shot is being steadied
+  pistol: { at: [-0.032, -0.055, 0.004], pocket: [0.06, 1.26, 0.34], atRest: false },
+  smg: { at: [0, -0.05, 0.19], pocket: [0.10, 1.285, 0.26], atRest: true },
+  ak47: { at: [0, 0.01, 0.265], pocket: [0.10, 1.295, 0.24], atRest: true },
+  // the rear of the pump slide, not the middle of it: 0.36 was out of reach
+  shotgun: { at: [0, -0.025, 0.27], pocket: [0.10, 1.295, 0.24], atRest: true },
+  sniper: { at: [0, -0.055, 0.06], pocket: [0.10, 1.295, 0.24], atRest: true },
+  // an RPG rides high, on the shoulder rather than in front of the ribs
+  rpg: { at: [0, -0.065, 0.155], pocket: [0.12, 1.40, 0.18], atRest: true },
+  minigun: { at: [0, 0.08, 0.06], pocket: [0.14, 1.19, 0.24], atRest: true },
+};
 
 /**
  * Creates high-detail procedural 3D weapon models.
@@ -303,5 +357,19 @@ export function createWeaponModel(id: WeaponId): WeaponModel | null {
   muzzle.position.set(0, muzzleY, muzzleZ);
   mesh.add(muzzle);
 
-  return { group, muzzle };
+  const g = GRIP[id];
+  let foregrip: THREE.Object3D | null = null;
+  if (g) {
+    foregrip = new THREE.Object3D();
+    foregrip.position.set(g.at[0], g.at[1], g.at[2]);
+    mesh.add(foregrip);
+  }
+
+  return {
+    group,
+    muzzle,
+    foregrip,
+    pocket: g ? new THREE.Vector3(g.pocket[0], g.pocket[1], g.pocket[2]) : null,
+    supportAtRest: !!g?.atRest,
+  };
 }

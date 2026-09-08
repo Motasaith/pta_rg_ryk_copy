@@ -41,6 +41,10 @@ export interface HudState {
   cheatMessage: string | null;
   /** the cheat prompt is up: gameplay input is off and the mouse is free */
   cheatConsoleOpen: boolean;
+  /** 0..1 black, for walking through a door into somewhere else */
+  fade: number;
+  /** name of the interior you are stood in, or '' outdoors */
+  interior: string;
   /** name of the map currently loaded, for the pause screen */
   mapName: string;
   /** 0..1 how far under water we are; the HUD tints and warns */
@@ -92,6 +96,7 @@ const initial: HudState = {
   clock: '00:00', hour: 11, fps: 0, triangles: 0, drawCalls: 0,
   aiming: false, hitMarker: 0, crosshairHot: false, busted: false, mapOpen: false,
   shopOpen: false, shopName: '', cheatMessage: null, cheatConsoleOpen: false,
+  fade: 0, interior: '',
   mapName: '', drowning: 0, weather: '', lightning: 0,
   wantedFading: false, spotted: false,
   jobName: '', jobTimer: 0, jobStreak: 0, jobEarned: 0,

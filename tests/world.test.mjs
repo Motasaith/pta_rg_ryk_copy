@@ -12,8 +12,15 @@ const { buildMaterials, rippleNormal } = await import('./materials.js');
 const city = await import('./city.js');
 const scheme = await import('./scheme.js');
 const { QUALITY } = await import('./settings.js');
-const { createHumanoid } = await import('./humanoid.js');
+const { createHumanoid, poseHumanoid } = await import('./humanoid.js');
+const { socket } = await import('./characters.js');
+const { buildOutfit, SKULL_TOP } = await import('./outfits.js');
+const { solveTwoBone } = await import('./ik.js');
+const { doorPoint, driverSide, enterPose, enterTime, exitPose, stepTime, EXIT_TIME } = await import('./carentry.js');
+const { atDoor, buildInterior, nearestStand } = await import('./interior.js');
 const { createVehicle } = await import('./vehicle.js');
+const { VEH_KINDS, PROTOCOL_VERSION } = await import('./protocol.js');
+const pickCivilian = (i) => VEH_KINDS[i % VEH_KINDS.length];
 const { createWeaponModel } = await import('./weapons.js');
 
 let fails = 0;
@@ -67,6 +74,516 @@ console.log('\nmodels');
   const kneeY = h.shinL.position.y, hipY = h.hips.position.y;
   ok(hipY > 0.85 && hipY < 1.0, `hip height is human (${hipY.toFixed(2)}m)`);
   ok(kneeY < -0.4, `knee sits below the hip (${kneeY.toFixed(2)}m)`);
+
+  /* -- clothes -------------------------------------------------------------------
+     Everyone used to be a bare mannequin tinted one flat colour. Measure the garments
+     rather than eyeball them: a cap that floats above the head and a hem that hangs
+     past the knee both look fine in code and wrong on screen. buildOutfit returns the
+     props alone, authored relative to the joint they hang from, so the numbers below
+     read back as real heights once the joint is added on. */
+  {
+    const HIP = 0.93, CHEST = 1.24, HEAD = 1.57;   // the capsule rig's joints
+    const cloth = { shirt: 0xd9d3c3, pants: 0xbfb9aa };
+    const bbox = (geo, joint) => {
+      const g = geo.clone();
+      g.translate(0, joint, 0);
+      g.computeBoundingBox();
+      return g.boundingBox;
+    };
+
+    const street = buildOutfit('street', 'none', cloth, SKULL_TOP.capsule);
+    ok(!street.hips && !street.chest && !street.head,
+      'plain shirt-and-trousers puts nothing extra on the model at all');
+
+    const topi = buildOutfit('street', 'topi', cloth, SKULL_TOP.capsule);
+    ok(!!topi.head && !topi.hips && !topi.chest, 'a topi is the only thing an ordinary civilian wears');
+
+    const cop = buildOutfit('police', 'peaked', { shirt: 0x23272f, pants: 0x1c1f26 }, SKULL_TOP.capsule);
+    const belt = bbox(cop.hips, HIP);
+    ok(belt.max.y > 0.98 && belt.max.y < 1.10, `the white belt is at the waist (${belt.max.y.toFixed(2)}m)`);
+    ok(bbox(cop.head, HEAD).max.z > 0.15,
+      `the peak of the cap points forward (${bbox(cop.head, HEAD).max.z.toFixed(2)}m of it)`);
+    ok(bbox(cop.chest, CHEST).max.x > 0.19, 'epaulettes reach the point of the shoulder');
+
+    const swat = buildOutfit('swat', 'helmet', { shirt: 0x14171c, pants: 0x14171c }, SKULL_TOP.capsule);
+    ok(bbox(swat.chest, CHEST).max.z > 0.14, 'the plate carrier stands proud of the chest');
+
+    /* Headwear on BOTH rigs. This is the one measurement the two disagree about — the
+       mannequin hangs its head from the base of the skull at 1.485m, the capsule rig
+       from most of the way up it at 1.57m — and getting it wrong does not look like a
+       small error, it looks like a cap worn inside somebody's head. Anchoring to the
+       crown rather than to the joint is what makes one set of numbers serve both. */
+    // How far below the crown each one is allowed to reach: a topi perches, a cap grips
+    // at the brow, a ballistic helmet comes down over the ears.
+    const HATS = [['peaked', 'police cap', 0.13], ['topi', 'topi', 0.05], ['helmet', 'helmet', 0.21]];
+    const wrong = [];
+    for (const [rig, joint, skull] of [['capsule', HEAD, 1.73], ['animated', 1.485, 1.78]]) {
+      for (const [hat, label, reach] of HATS) {
+        const g = bbox(buildOutfit('street', hat, cloth, SKULL_TOP[rig]).head, joint);
+        if (!(g.max.y > skull && g.max.y < skull + 0.07)) {
+          wrong.push(`${rig} ${label} tops out at ${g.max.y.toFixed(3)}m, skull ends at ${skull}m`);
+        } else if (g.min.y > skull - 0.02 || g.min.y < skull - reach - 0.03) {
+          wrong.push(`${rig} ${label} reaches down to ${g.min.y.toFixed(3)}m`);
+        }
+      }
+    }
+    ok(!wrong.length,
+      'cap, topi and helmet all sit on the skull on both the mannequin and the capsule rig',
+      wrong.join('; '));
+  }
+
+  /* Dressing costs nothing on the capsule rig: the garments merge into joints that were
+     already there, so a constable is the same eleven draw calls as a civilian. */
+  const dressed = (extra) => createHumanoid({
+    skin: 0xf0c69a, shirt: 0xd9d3c3, pants: 0xbfb9aa, hair: 0x24170f, shoes: 0x222222,
+    scale: 1, ...extra,
+  });
+  const plain = dressed({ outfit: 'street' });
+  let sameCost = true;
+  for (const o of ['police', 'swat']) {
+    if (dressed({ outfit: o }).meshes.length !== plain.meshes.length) sameCost = false;
+  }
+  ok(sameCost, `police and SWAT uniforms cost the same ${plain.meshes.length} draw calls as a bare model`);
+
+  /* -- the Carry Daba ----------------------------------------------------------------
+     There is no free, redistributable Suzuki Bolan anywhere on the internet — see
+     docs/assets.md — so it is built here instead, to the real vehicle's measurements.
+     The shape is the entire point of a Bolan: a box as tall as a person, with no bonnet,
+     the driver over the front axle and the wheels shoved into the corners. Get the
+     proportions wrong and it is just a van. */
+  {
+    const carry = createVehicle('carry', 0xf0f0ec);
+    const sp = carry.spec;
+    ok(Math.abs(sp.halfL * 2 - 3.38) < 0.05, `3.38m long (${(sp.halfL * 2).toFixed(2)})`);
+    ok(Math.abs(sp.halfW * 2 - 1.40) < 0.05, `1.40m wide (${(sp.halfW * 2).toFixed(2)})`);
+    ok(Math.abs(sp.height - 1.84) < 0.05, `1.84m tall (${sp.height.toFixed(2)})`);
+    ok(sp.height > sp.halfW * 2, 'taller than it is wide, which almost nothing else here is');
+    ok(sp.wheelbase / (sp.halfL * 2) > 0.5,
+      `the wheelbase is ${(100 * sp.wheelbase / (sp.halfL * 2)).toFixed(0)}% of its length — `
+      + 'the wheels are at the corners, not tucked under a nose and a tail');
+    ok(sp.seat[2] > sp.halfL * 0.3,
+      `and the driver sits ${sp.seat[2].toFixed(2)}m forward, over the front axle, because a `
+      + 'Bolan has no bonnet to sit behind');
+    ok(sp.maxSpeed * 3.6 < 100 && sp.maxSpeed * 3.6 > 85,
+      `796cc, so ${(sp.maxSpeed * 3.6).toFixed(0)} km/h and no more`);
+
+    // it has to actually be built, and be a box rather than a car silhouette
+    carry.group.updateMatrixWorld(true);
+    const bb = new THREE.Box3().setFromObject(carry.bodyPivot);
+    ok(bb.max.y > 1.6, `the body reaches ${bb.max.y.toFixed(2)}m, so it reads as a van from across the street`);
+    ok(bb.max.y - bb.min.y > (bb.max.x - bb.min.x), 'and its silhouette is taller than it is wide');
+    ok(carry.wheelMeshes.length === 4, 'four wheels');
+    ok(carry.wheelMeshes.filter((w) => w.front).length === 2, 'two of which steer');
+
+    // Lamps used to be placed at W * 1.2 — the *centre* of the lamp 20% outside the
+    // bodywork. Invisible on the sedan and the rest, because those use downloaded models;
+    // very visible on anything still built out of boxes.
+    const inside = [];
+    for (const k of ['van', 'rickshaw', 'truck', 'carry']) {
+      const v = createVehicle(k, 0xcccccc);
+      v.group.updateMatrixWorld(true);
+      const w = new THREE.Box3().setFromObject(v.bodyPivot);
+      // +0.7 of slack for mirrors, which really do stick out on a truck.
+      if ((w.max.x - w.min.x) > v.spec.halfW * 2 + 0.7) {
+        inside.push(`${k}: body box ${(w.max.x - w.min.x).toFixed(2)}m wide on a ${(v.spec.halfW * 2).toFixed(2)}m vehicle`);
+      }
+    }
+    ok(!inside.length,
+      'headlights and tail lights sit inside the bodywork on every vehicle still built out '
+      + 'of boxes, rather than floating beside the wings', inside.join('; '));
+
+    // it is on the street, and it survives the wire
+    const civilians = new Set();
+    for (let i = 0; i < 400; i++) civilians.add(createVehicle(pickCivilian(i), 0).spec.name);
+    ok(VEH_KINDS.includes('carry'), 'the Carry Daba has a slot on the wire');
+    ok(VEH_KINDS.indexOf('carry') === VEH_KINDS.length - 1,
+      'appended to the end of VEH_KINDS, because the index is what goes over the network '
+      + 'and reordering that list turns everybody else\'s traffic into different cars');
+    ok(PROTOCOL_VERSION >= 4,
+      `and the protocol version was bumped for it (v${PROTOCOL_VERSION}) rather than letting an `
+      + 'older client decode an index off the end of its own list');
+  }
+
+  /* -- rooms you can walk into -------------------------------------------------------
+     A shop was a counter on the pavement that opened a full-screen menu; home was a door
+     that did nothing. They are places now. Interiors are separate cells parked six
+     kilometres outside the city — the GTA trick — so the things worth checking are that
+     nothing in a room is standing inside anything else, that the floor exists, and that
+     the cells cannot possibly touch the city. */
+  {
+    const PR = 0.36;   // player radius
+    const ipx = new Physics();
+    ipx.build();          // deliberately BEFORE the rooms: that is when it happens in the
+                          // real game, and colliders added after a build are invisible to
+                          // the spatial hash unless they index themselves
+    const iscene = new THREE.Scene();
+    // its own material set: this block runs before the city has built one
+    const imats = buildMaterials();
+    const rooms = ['ammo', 'health', 'food', 'home'].map(
+      (k) => buildInterior(k, imats, ipx, iscene, 0));
+
+    // Nothing in the city can reach them, and they cannot reach each other.
+    const far = rooms.every((r) => Math.hypot(r.entry.x, r.entry.z) > 3000);
+    ok(far, 'every interior sits thousands of metres outside the city, so no room and no '
+      + 'street ever share collision space');
+    let overlap = false;
+    for (let i = 0; i < rooms.length; i++) {
+      for (let j = i + 1; j < rooms.length; j++) {
+        if (Math.hypot(rooms[i].entry.x - rooms[j].entry.x, rooms[i].entry.z - rooms[j].entry.z) < 24) overlap = true;
+      }
+    }
+    ok(!overlap, 'and the four of them are spaced far enough apart not to overlap each other');
+
+    // You have to be able to stand where you land, and on something.
+    const stuck = [];
+    for (const r of rooms) {
+      const floor = ipx.groundHeight(r.entry.x, r.entry.z, PR, 3);
+      if (Math.abs(floor - r.y) > 0.02) stuck.push(`${r.kind}: no floor under the doorway (${floor.toFixed(2)}m)`);
+      if (!ipx.isFree(r.entry.x, r.entry.z, PR, r.y, r.y + 1.8, null)) stuck.push(`${r.kind}: you arrive inside something`);
+      if (atDoor(r, r.entry.x, r.entry.z)) stuck.push(`${r.kind}: you arrive already in the doorway`);
+    }
+    ok(!stuck.length, 'you land on the floor of every room, clear of the furniture and just '
+      + 'inside the door rather than on top of the trigger that leads back out', stuck.join('; '));
+
+    // Every stand has to be somewhere a person can actually stand.
+    const blocked = [];
+    let total = 0;
+    for (const r of rooms) {
+      for (const st of r.stands) {
+        total++;
+        if (!ipx.isFree(st.x, st.z, PR, r.y, r.y + 1.8, null)) {
+          blocked.push(`${r.kind}/${st.action}`);
+        } else if (nearestStand(r, st.x, st.z) !== st) {
+          blocked.push(`${r.kind}/${st.action} is masked by another stand`);
+        }
+      }
+    }
+    ok(!blocked.length,
+      `all ${total} things you can walk up to are places you can actually stand`,
+      blocked.join('; '));
+
+    // The door is shut, and solid: an open doorway is a hole for the third-person camera
+    // to slide out through, which is exactly what it did.
+    const doorBlocked = rooms.every(
+      (r) => !ipx.isFree(r.door.x, r.door.z + 0.05, PR, r.y + 0.2, r.y + 1.8, null));
+    ok(doorBlocked, 'the door is shut and solid, so the camera cannot back out through it');
+
+    // The doorway leads out, and only from the doorway.
+    const shop = rooms[0];
+    ok(atDoor(shop, shop.door.x, shop.door.z + 0.5), 'walking into the doorway leads outside');
+    ok(!atDoor(shop, shop.door.x + 2.5, shop.door.z + 0.5), 'but standing along the front wall does not');
+    ok(!atDoor(shop, shop.door.x, shop.door.z + 4), 'and neither does standing in the middle of the room');
+
+    // The shop sells things; home does the things you cannot buy.
+    const actions = (k) => new Set(rooms.find((r) => r.kind === k).stands.map((st) => st.action));
+    ok(actions('ammo').has('ammo') && actions('ammo').has('armour'),
+      'the gun shop sells ammunition off the rack and armour at the counter');
+    ok(actions('ammo').has('menu'),
+      'and the counter still opens the full list, so nothing that used to be buyable stopped being buyable');
+    const home = actions('home');
+    ok(home.has('sleep') && home.has('eat') && home.has('wardrobe'),
+      'home has a bed, a fridge and a wardrobe');
+    ok(!home.has('menu') && !home.has('ammo'), 'and does not sell you anything');
+  }
+
+  /* -- getting in and out of a car -------------------------------------------------
+     E used to teleport you: one frame on the pavement, the next behind the wheel with the
+     engine running. It is a move now, and the thing a move must never do is jump — so
+     this walks the whole thing frame by frame and measures every step. */
+  {
+    const SPECS_SEAT = { sedan: [-0.42, 0.62, 0.25], truck: [-0.62, 1.72, 2.2], rickshaw: [0, 0.6, 0.1] };
+
+    // Which door. Every seat in the game sits at a negative x, which in vehicle space is
+    // the car's left; the old exit code put you out on the right on the grounds that
+    // Pakistan drives on the left, and so stood you at the passenger door of your own car.
+    ok(driverSide(SPECS_SEAT.sedan[0]) === 1,
+      'a sedan\'s driver door is on the car\'s right — every seat in SPECS is at a negative '
+      + 'local x, and local +X is the car\'s LEFT, so that is right-hand drive');
+    ok(driverSide(SPECS_SEAT.truck[0]) === 1, 'and so is the Bedford\'s');
+    ok(driverSide(SPECS_SEAT.rickshaw[0]) === 1, 'a rickshaw seats you centrally, so either side will do');
+
+    // The door point has to be outside the car and level with the seat, whatever heading
+    // the car is parked on.
+    for (const yaw of [0, 0.7, 2.4, -1.9, Math.PI]) {
+      const halfW = 0.86, seatZ = 0.25;
+      const d = doorPoint(12, -30, yaw, halfW, seatZ, -1);
+      const rel = { x: d.x - 12, z: d.z + 30 };
+      // project back onto the car's own axes: rgt is (-cos, sin), fwd is (sin, cos)
+      const lx = rel.x * -Math.cos(yaw) + rel.z * Math.sin(yaw);
+      const lz = rel.x * Math.sin(yaw) + rel.z * Math.cos(yaw);
+      if (Math.abs(lx + (halfW + 0.52)) > 1e-6 || Math.abs(lz - seatZ) > 1e-6) {
+        ok(false, 'the door point is beside the car at seat level, on any heading',
+          `yaw ${yaw}: local ${lx.toFixed(3)},${lz.toFixed(3)}`);
+        break;
+      }
+    }
+    ok(true, 'the door point sits 0.52m clear of the door skin, level with the seat, on any heading');
+
+    // Walk the whole entry at 60fps and measure it.
+    const from = { x: 3.4, y: 0.17, z: -1.2, yaw: 2.9, crouch: 0 };
+    const door = doorPoint(0, 0, 0.4, 0.86, 0.25, -1);
+    const seat = { x: -0.3, y: 0.62, z: 0.25 };
+    const stepT = stepTime(Math.hypot(door.x - from.x, door.z - from.z));
+    const total = enterTime(stepT);
+
+    let prev = enterPose(0, from, door, 0.17, seat, 0.4, -1, stepT);
+    ok(Math.hypot(prev.x - from.x, prev.z - from.z) < 1e-9,
+      'the move starts exactly where the player was standing, not at the door');
+    let biggest = 0, peakCrouch = 0, biggestTurn = 0;
+    for (let i = 1; i <= Math.ceil(total * 60); i++) {
+      const p = enterPose(Math.min(i / 60, total), from, door, 0.17, seat, 0.4, -1, stepT);
+      biggest = Math.max(biggest, Math.hypot(p.x - prev.x, p.z - prev.z, p.y - prev.y));
+      biggestTurn = Math.max(biggestTurn, Math.abs(((p.yaw - prev.yaw) + Math.PI * 3) % (Math.PI * 2) - Math.PI));
+      peakCrouch = Math.max(peakCrouch, p.crouch);
+      prev = p;
+    }
+    ok(biggest < 0.12,
+      `no frame of getting in moves the player more than ${(biggest * 100).toFixed(0)}cm — `
+      + 'it is a walk and a duck, not the teleport it replaced');
+    ok(biggestTurn < 0.2, `and never spins more than ${(biggestTurn * 57).toFixed(0)}° in a frame`);
+    ok(Math.hypot(prev.x - seat.x, prev.y - seat.y, prev.z - seat.z) < 1e-6,
+      'and it finishes in the seat exactly, so nothing has to be snapped into place after');
+    ok(peakCrouch > 0.99, 'ducking through the door on the way');
+    ok(enterPose(total, from, door, 0.17, seat, 0.4, -1, stepT).crouch < 0.01,
+      'and straightening up again once in');
+
+    // A long walk takes longer than a short one, instead of being a lunge.
+    ok(stepTime(3.4) > stepTime(0.6) * 2,
+      `crossing 3.4m to the door takes ${stepTime(3.4).toFixed(2)}s against ${stepTime(0.6).toFixed(2)}s `
+      + 'for a step, rather than a fixed third of a second at 10 m/s either way');
+    ok(3.4 / stepTime(3.4) < 4.2,
+      `so even the longest approach is a jog at ${(3.4 / stepTime(3.4)).toFixed(1)} m/s, not a lunge`);
+
+    // Getting out: seat to pavement, no jumps, ending on the chosen spot.
+    const spot = { x: door.x - 0.5, z: door.z - 0.2 };
+    let q = exitPose(0, seat, door, 0.17, spot, 0.4, -1);
+    ok(Math.hypot(q.x - seat.x, q.z - seat.z) < 1e-9, 'getting out starts in the seat');
+    let worst = 0;
+    for (let i = 1; i <= Math.ceil(EXIT_TIME * 60); i++) {
+      const p = exitPose(Math.min(i / 60, EXIT_TIME), seat, door, 0.17, spot, 0.4, -1);
+      worst = Math.max(worst, Math.hypot(p.x - q.x, p.z - q.z, p.y - q.y));
+      q = p;
+    }
+    ok(worst < 0.12, `and no frame of it moves more than ${(worst * 100).toFixed(0)}cm either`);
+    ok(Math.hypot(q.x - spot.x, q.z - spot.z) < 1e-6 && Math.abs(q.y - 0.17) < 1e-9,
+      'ending on both feet at the spot that was checked for clearance');
+    ok(EXIT_TIME < enterTime(stepTime(1.5)), 'getting out is quicker than getting in');
+  }
+
+  /* -- the support hand ------------------------------------------------------------
+     Every gun used to hang off one socket on the right hand while the left arm carried
+     on swinging through whatever the animation clip said, which is what "the weapon
+     looks built in to his hands" actually was. The fix is a solve, not a keyframe: the
+     clip cannot know how long an AK is. Check the solver reaches, and — the part that
+     goes visibly wrong if it is subtly broken — that the elbow never folds through the
+     ribcage. */
+  {
+    const V = (x, y, z) => new THREE.Vector3(x, y, z);
+    const UP = V(0, 1, 0), DOWN = V(0, -1, 0);
+    /** Walk the chain the solver produced and report where the hand actually ended up. */
+    const chain = (root, sol, l1, l2, axis) => {
+      const elbow = axis.clone().applyQuaternion(sol.upper).multiplyScalar(l1).add(root.clone());
+      const hand = axis.clone().applyQuaternion(sol.lower).multiplyScalar(l2).add(elbow);
+      return { elbow, hand };
+    };
+
+    const shoulder = V(-0.2, 1.44, 0);
+    const L1 = 0.29, L2 = 0.29;
+    const pole = V(-0.8, -0.5, -0.6).normalize();
+
+    // A rifle foregrip: forward, across the body, well inside arm's length.
+    for (const [name, target] of [
+      ['a rifle foregrip', V(0.02, 1.3, 0.34)],
+      ['a pistol steadied in both hands', V(0.06, 1.26, 0.24)],
+      ['an RPG on the shoulder', V(-0.02, 1.46, 0.3)],
+      ['straight down by the hip', V(-0.22, 1.0, 0.02)],
+    ]) {
+      for (const axis of [UP, DOWN]) {
+        const sol = solveTwoBone(shoulder, target, pole, L1, L2, axis);
+        const { hand } = chain(shoulder, sol, L1, L2, axis);
+        if (hand.distanceTo(target) > 1e-4) {
+          ok(false, `the hand reaches ${name}`,
+            `off by ${hand.distanceTo(target).toFixed(4)}m with bones along ${axis.y > 0 ? '+Y' : '-Y'}`);
+        }
+      }
+    }
+    ok(true, 'the support hand lands exactly on the foregrip, on both rigs\' bone conventions');
+
+    // The elbow. Both solutions reach the target; only one of them is an arm.
+    const sol = solveTwoBone(shoulder, V(0.02, 1.3, 0.34), pole, L1, L2, UP);
+    const { elbow } = chain(shoulder, sol, L1, L2, UP);
+    // Both solutions put the hand on the foregrip; only one of them is an arm. Flipping
+    // the pole gives the mirror, and it is worth showing what that costs.
+    const mirror = chain(shoulder,
+      solveTwoBone(shoulder, V(0.02, 1.3, 0.34), pole.clone().negate(), L1, L2, UP), L1, L2, UP).elbow;
+    ok(elbow.y < shoulder.y - 0.15,
+      `the elbow hangs ${(shoulder.y - elbow.y).toFixed(2)}m below the shoulder, the way it `
+      + 'does when you bring a rifle up');
+    ok(mirror.y > shoulder.y,
+      `while the mirror reaches the same foregrip with the elbow ${(mirror.y - shoulder.y).toFixed(2)}m `
+      + 'ABOVE the shoulder and folded across the chest — which is the whole job of the pole vector');
+    ok(elbow.z < 0.34, `and it stays behind the hand (elbow z ${elbow.z.toFixed(2)})`);
+
+    // Out of reach: point at it, do not snap to something nearer.
+    const far = solveTwoBone(shoulder, V(0.9, 1.44, 1.4), pole, L1, L2, UP);
+    ok(far.stretched, 'a target beyond arm\'s length is reported as out of reach');
+    const reach = chain(shoulder, far, L1, L2, UP);
+    ok(reach.hand.distanceTo(shoulder) > (L1 + L2) - 1e-3,
+      `and the arm goes straight for it (${reach.hand.distanceTo(shoulder).toFixed(3)}m of ${(L1 + L2).toFixed(2)}m)`);
+    ok(reach.elbow.distanceTo(shoulder) > L1 - 1e-3, 'with the elbow locked out, not bent');
+
+    // Degenerate inputs the game will hand it: a target on the shoulder, and a target
+    // exactly along the pole where there is no bend plane to pick.
+    for (const [why, t, p] of [
+      ['a target sitting on the shoulder', shoulder.clone(), pole],
+      ['a target straight down the pole vector', shoulder.clone().addScaledVector(pole, 0.3), pole],
+    ]) {
+      const d = solveTwoBone(shoulder, t, p, L1, L2, UP);
+      const bad = [d.upper, d.lower].some((q) => !Number.isFinite(q.x + q.y + q.z + q.w));
+      if (bad) { ok(false, `${why} does not produce NaN`); break; }
+    }
+    ok(true, 'degenerate targets stay finite rather than NaN-ing the whole skeleton');
+  }
+
+  /* End to end, on a real rig, for every weapon in the game.
+     The solver being right is not the same as the wiring being right, and the wiring was
+     not: with the rifle hanging off the right hand at arm's length the AK's handguard sat
+     0.71m from the left shoulder, and an arm here is 0.58m. The support hand could only
+     ever hover near it. A shouldered weapon and two solves fixed that; this is the test
+     that would have caught it. */
+  {
+    const dressed = () => createHumanoid({
+      skin: 0xf0c69a, shirt: 0xd9d3c3, pants: 0xbfb9aa, hair: 0x24170f, shoes: 0x222222, scale: 1,
+    });
+    const frame = (h, aiming) => poseHumanoid(h, {
+      dt: 1 / 60, t: 0, speed: 0, runSpeed: 6, grounded: true, airVy: 0, aiming,
+      aimPitch: 0, dead: 0, seated: false, punch: 0, flinch: 0, steer: 0,
+    });
+    /** Where the palm ends up, walking down the arm the pose code just set. */
+    const palm = (h, elbow) => {
+      h.root.updateMatrixWorld(true);
+      return elbow.localToWorld(new THREE.Vector3(0, -0.29, 0));
+    };
+
+    ok(createWeaponModel('knife').foregrip === null, 'a knife never grows a second hand');
+    ok(createWeaponModel('pistol').supportAtRest === false,
+      'and a pistol is one-handed until you steady it');
+
+    const missed = [];
+    for (const id of ['smg', 'ak47', 'shotgun', 'sniper', 'rpg', 'minigun']) {
+      const h = dressed();
+      const w = createWeaponModel(id);
+      if (!w.foregrip || !w.supportAtRest) { missed.push(`${id} is not two-handed at all`); continue; }
+      h.rifleMount.position.copy(w.pocket);
+      h.rifleMount.add(w.group);
+      h.grip = { at: w.foregrip, atRest: true };
+      h.hold = w.group;
+      for (let i = 0; i < 90; i++) frame(h, true);
+
+      const offL = palm(h, h.foreL).distanceTo(w.foregrip.getWorldPosition(new THREE.Vector3()));
+      const offR = palm(h, h.foreR).distanceTo(w.group.getWorldPosition(new THREE.Vector3()));
+      if (offL > 0.03) missed.push(`${id}: support hand ${(offL * 100).toFixed(1)}cm off the handguard`);
+      if (offR > 0.03) missed.push(`${id}: firing hand ${(offR * 100).toFixed(1)}cm off the grip`);
+    }
+    ok(!missed.length, 'both hands land on all six two-handed weapons', missed.join('; '));
+
+    // And nothing drags on the pavement while it is being carried. The RPG's tube is
+    // 0.85m long; at the half-radian low-ready angle the first version of this put the
+    // warhead through the player's own feet.
+    const dragging = [];
+    for (const id of ['pistol', 'smg', 'ak47', 'shotgun', 'sniper', 'rpg', 'minigun']) {
+      const h = dressed();
+      const w = createWeaponModel(id);
+      h.pocket.copy(w.pocket);
+      h.rifleMount.add(w.group);
+      h.grip = { at: w.foregrip, atRest: w.supportAtRest };
+      h.hold = w.group;
+      for (let i = 0; i < 150; i++) frame(h, false);
+      h.root.updateMatrixWorld(true);
+      const bb = new THREE.Box3().setFromObject(w.group);
+      if (bb.min.y < 0.3) dragging.push(`${id} hangs down to ${bb.min.y.toFixed(2)}m`);
+      if (bb.max.y > 1.85) dragging.push(`${id} sticks up to ${bb.max.y.toFixed(2)}m`);
+    }
+    ok(!dragging.length,
+      'and carried at rest, every one of them clears the ground and stays below head height',
+      dragging.join('; '));
+
+    // The pistol: one hand at rest, two once the shot is steadied, and the support hand
+    // has to be able to reach across to it.
+    {
+      const h = dressed();
+      const w = createWeaponModel('pistol');
+      h.pocket.copy(w.pocket);
+      h.rifleMount.add(w.group);
+      h.hold = w.group;
+      h.grip = { at: w.foregrip, atRest: false };
+      const support = () => palm(h, h.foreL).distanceTo(w.foregrip.getWorldPosition(new THREE.Vector3()));
+      const firing = () => palm(h, h.foreR).distanceTo(w.group.getWorldPosition(new THREE.Vector3()));
+
+      for (let i = 0; i < 120; i++) frame(h, false);
+      ok(firing() < 0.03, 'walking around, the pistol stays in the firing hand');
+      ok(support() > 0.15,
+        `with the other arm swinging free ${(support() * 100).toFixed(0)}cm away, not welded to the gun`);
+      const carriedAt = w.group.getWorldPosition(new THREE.Vector3()).y;
+
+      for (let i = 0; i < 120; i++) frame(h, true);
+      ok(support() < 0.03, `and the off hand comes up to cup it when aiming (${(support() * 100).toFixed(1)}cm)`);
+      ok(w.group.getWorldPosition(new THREE.Vector3()).y > carriedAt + 0.1,
+        'the gun comes up from the hip to do it, rather than the arms reaching down to a '
+        + 'weapon that was already levelled at everybody in the street');
+    }
+
+    // Putting it away has to let go, and let go smoothly.
+    {
+      const h = dressed();
+      const w = createWeaponModel('ak47');
+      h.rifleMount.position.copy(w.pocket);
+      h.rifleMount.add(w.group);
+      h.grip = { at: w.foregrip, atRest: true };
+      h.hold = w.group;
+      for (let i = 0; i < 90; i++) frame(h, true);
+      ok(h.gripW > 0.98, 'the solve ramps fully in while a weapon is out');
+      h.grip = null; h.hold = null;
+      frame(h, false);
+      ok(h.gripW > 0.5 && h.gripW < 1,
+        `switching to fists releases the arms over several frames (${h.gripW.toFixed(2)} after one), `
+        + 'instead of snapping them back to the hips in a single one');
+      for (let i = 0; i < 120; i++) frame(h, false);
+      ok(h.gripW < 0.02, 'and lets go completely');
+    }
+
+    // Empty hands must not cost anything: no grip, no solve, no matrix walk.
+    const idle = dressed();
+    frame(idle, true);
+    ok(idle.gripW === 0, 'a character with empty hands never runs the solver at all');
+  }
+
+  /* The bone socket. Rig bones carry a scale of 100 and arbitrary rest orientations, so
+     a prop parented straight to one arrives huge and tilted; this is the correction. */
+  {
+    const root = new THREE.Group();
+    const inner = new THREE.Group();
+    inner.scale.setScalar(1.1);          // charScale
+    inner.rotation.y = Math.PI;          // the model faces -Z
+    root.add(inner);
+    const bone = new THREE.Group();
+    bone.scale.setScalar(100);
+    bone.position.set(0.02, 0.86, 0.09);
+    bone.rotation.set(0.31, 0.2, -0.15); // some rest pose nobody chose
+    inner.add(bone);
+    root.updateMatrixWorld(true);
+
+    const m = socket(bone, 1.3);         // a tall ped
+    root.updateMatrixWorld(true);
+    const p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
+    m.matrixWorld.decompose(p, q, s);
+    ok(Math.abs(s.x - 1.3) < 1e-6 && Math.abs(s.y - 1.3) < 1e-6,
+      `one unit on the socket is one metre, scaled to the wearer (${s.x.toFixed(3)})`);
+    ok(Math.abs(q.x) < 1e-6 && Math.abs(q.y) < 1e-6 && Math.abs(q.z) < 1e-6,
+      'the prop comes out upright however the bone was posed at bind time');
+    const bp = new THREE.Vector3().setFromMatrixPosition(bone.matrixWorld);
+    ok(p.distanceTo(bp) < 1e-6, 'and its origin sits exactly on the joint');
+  }
 
   for (const kind of ['sedan', 'suv', 'van', 'sports', 'police', 'rickshaw', 'hatch']) {
     const v = createVehicle(kind, 0xb8342a);

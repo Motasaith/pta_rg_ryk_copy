@@ -17,7 +17,21 @@
  */
 
 /** How much harder each successive star is to earn. */
-const RESISTANCE = 1.15;
+const RESISTANCE = 1.5;
+
+/**
+ * The fastest the meter can fill, in stars per second.
+ *
+ * This is the second half of "the actual GTA police take time". Ceilings stopped a
+ * single act from being worth five stars, but the meter still *jumped*: shoot two
+ * officers in the same second and two stars appeared in the same second. A real
+ * escalation is a dispatcher deciding, a call going out, more units being assigned —
+ * so crimes now set a target and the visible level climbs towards it at this rate.
+ * Half a star a second means the worst rampage in the game still needs ten seconds to
+ * produce a five-star response, and one bad decision cannot produce three stars before
+ * you have finished making it.
+ */
+export const RISE_RATE = 0.5;
 
 export interface Crime {
   /** raw heat, before resistance */
@@ -35,27 +49,27 @@ export interface Crime {
  */
 export const CRIME = {
   /** a shot heard by someone who is not a police officer */
-  gunfireHeard: { heat: 0.22, ceiling: 2 },
+  gunfireHeard: { heat: 0.18, ceiling: 2 },
   /** a shot heard by an officer */
-  gunfireSeenByCop: { heat: 0.5, ceiling: 2 },
+  gunfireSeenByCop: { heat: 0.4, ceiling: 2 },
   /** firing a rocket launcher: loud, but the blast is the real crime */
-  rocketFired: { heat: 0.3, ceiling: 3 },
+  rocketFired: { heat: 0.26, ceiling: 3 },
   /** a punch or a blade that did not kill */
-  brawl: { heat: 0.12, ceiling: 1 },
+  brawl: { heat: 0.1, ceiling: 1 },
   /** clipping someone with a car */
-  pedestrianStruck: { heat: 0.25, ceiling: 1 },
+  pedestrianStruck: { heat: 0.2, ceiling: 1 },
   /** taking a car whose alarm went off */
-  carAlarm: { heat: 0.35, ceiling: 2 },
+  carAlarm: { heat: 0.3, ceiling: 2 },
   /** taking a car quietly */
-  hijack: { heat: 0.1, ceiling: 1 },
-  explosion: { heat: 0.7, ceiling: 4 },
-  civilianKilled: { heat: 0.9, ceiling: 3 },
-  civilianRunOver: { heat: 1.0, ceiling: 3 },
+  hijack: { heat: 0.09, ceiling: 1 },
+  explosion: { heat: 0.5, ceiling: 4 },
+  civilianKilled: { heat: 0.6, ceiling: 3 },
+  civilianRunOver: { heat: 0.7, ceiling: 3 },
   /**
-   * 1.2, so the first dead officer is *just* over one star rather than nearly two. It is
-   * still by far the heaviest single act in the table, and the only route to five.
+   * Still the heaviest single act in the table and the only route to five stars, but two
+   * officers now buy the first star rather than one buying most of two.
    */
-  officerKilled: { heat: 1.2, ceiling: 5 },
+  officerKilled: { heat: 0.95, ceiling: 5 },
 } as const satisfies Record<string, Crime>;
 
 /**
@@ -69,6 +83,16 @@ export function escalate(wanted: number, crime: Crime): number {
   if (crime.heat <= 0 || wanted >= crime.ceiling) return wanted;
   const gained = crime.heat / (1 + wanted * RESISTANCE);
   return Math.min(wanted + gained, crime.ceiling);
+}
+
+/**
+ * Move the visible wanted level towards where the crimes have put it, no faster than
+ * RISE_RATE. Pure, and separate from `escalate`, because they answer different
+ * questions: escalate decides how bad this is, this decides how fast anyone finds out.
+ */
+export function riseTowards(wanted: number, target: number, dt: number): number {
+  if (target <= wanted) return wanted;
+  return Math.min(target, wanted + RISE_RATE * dt);
 }
 
 /** How many of one offence it takes to reach `stars`, or Infinity if it never can. */

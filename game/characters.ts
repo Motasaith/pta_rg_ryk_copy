@@ -1,7 +1,11 @@
 import * as THREE from 'three';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import type { AssetBank } from './assets';
-import type { Humanoid, Look, PoseInput } from './humanoid';
+import {
+  BONE_UP, holdWeapon, humanoidMaterial, RIFLE_POCKET,
+  type ArmRig, type GripTarget, type Humanoid, type Look, type PoseInput,
+} from './humanoid';
+import { buildOutfit, defaultHat, SKULL_TOP } from './outfits';
 
 /**
  * Animated humans from Quaternius' CC0 "Universal Base Character" (a skinned
@@ -15,6 +19,13 @@ import type { Humanoid, Look, PoseInput } from './humanoid';
  */
 
 export interface AnimatedHumanoid extends Humanoid {
+  /** Clothing hung off the bones. Owned by this character, unlike the shared body. */
+  props: THREE.Mesh[];
+  /**
+   * Both arms, and how long they are. Measured off the bind pose rather than assumed, so
+   * it comes out right for a 0.93-scale pedestrian and a 1.05-scale officer alike.
+   */
+  armIK: ArmRig | null;
   mixer: THREE.AnimationMixer;
   a: Record<ClipName, THREE.AnimationAction | undefined>;
   loco: THREE.AnimationAction | null;
@@ -67,6 +78,46 @@ export function animatedHumansAvailable(): boolean {
   return template !== null;
 }
 
+/**
+ * Find a rig bone by the name it has in Blender.
+ *
+ * GLTFLoader runs every node name through `PropertyBinding.sanitizeNodeName`, which strips
+ * the dots — so `DEF-hand.R` in the file arrives in the scene as `DEF-handR`. Every bone on
+ * this rig whose name contains a dot is affected: both upper arms, both forearms, both
+ * hands, and every spine bone.
+ *
+ * That mattered a great deal, because a lookup that misses just returns null and null
+ * quietly does nothing. Two features were silently dead: the arm IK never found an arm, so
+ * a shouldered weapon hung in mid-air in front of the chest with both arms by the
+ * character's sides; and the chest socket never resolved, so police epaulettes and the
+ * SWAT plate carrier were built and then thrown away. Neither threw, neither logged, and
+ * both looked exactly like a bug in something else.
+ */
+function bone(root: THREE.Object3D, name: string): THREE.Object3D | null {
+  return root.getObjectByName(name.replace(/\./g, '')) ?? root.getObjectByName(name) ?? null;
+}
+
+/**
+ * A world-upright, metre-scaled mount on a bone.
+ *
+ * The rig carries an internal scale of 100 and every bone has its own rest orientation,
+ * so a prop parented straight to one arrives a hundred times too big and tilted by
+ * whatever the bind pose happened to be. This undoes both **once, at bind time**: the
+ * mount comes out axis-aligned with the character, with one unit to the metre, and its
+ * origin exactly on the joint. After that the prop simply rides the bone, which is what
+ * a cap or a belt does on a real person too.
+ */
+export function socket(bone: THREE.Object3D, lookScale: number): THREE.Object3D {
+  bone.updateWorldMatrix(true, false);
+  const p = new THREE.Vector3(), q = new THREE.Quaternion(), sc = new THREE.Vector3();
+  bone.matrixWorld.decompose(p, q, sc);
+  const m = new THREE.Object3D();
+  m.quaternion.copy(q).invert();
+  m.scale.setScalar(lookScale / (sc.x || 1));
+  bone.add(m);
+  return m;
+}
+
 export function createAnimatedHumanoid(look: Look): AnimatedHumanoid {
   const root = new THREE.Group();
   const inner = skeletonClone(template!) as THREE.Group;
@@ -91,10 +142,20 @@ export function createAnimatedHumanoid(look: Look): AnimatedHumanoid {
     const mats = Array.isArray(m.material) ? m.material : [m.material];
     for (const x of mats) {
       const mat = x as THREE.MeshStandardMaterial;
-      if (mat.color && /main|body/i.test(mat.name || 'main')) {
-        const shirt = new THREE.Color(look.shirt);
-        const skin = new THREE.Color(look.skin);
-        mat.color.copy(skin.lerp(shirt, 0.72));
+      if (!mat.color) continue;
+      const shirt = new THREE.Color(look.shirt);
+      const skin = new THREE.Color(look.skin);
+      // A uniform covers the whole officer; ordinary clothes leave more skin showing.
+      const uniform = look.outfit === 'police' || look.outfit === 'swat';
+      if (/joint/i.test(mat.name || '')) {
+        // The mannequin ships a second material on the shoulder and elbow caps, and it
+        // was never being tinted — so every character in the game, whatever they were
+        // wearing, had bright magenta patches at each joint. Sit it a shade under the
+        // body so the caps read as seams instead of as a costume malfunction.
+        mat.color.copy(skin.lerp(shirt, uniform ? 0.95 : 0.8)).multiplyScalar(0.72);
+        mat.roughness = 0.85;
+      } else {
+        mat.color.copy(skin.lerp(shirt, uniform ? 0.93 : 0.72));
         mat.roughness = 0.8;
       }
     }
@@ -121,14 +182,70 @@ export function createAnimatedHumanoid(look: Look): AnimatedHumanoid {
   gunMount.scale.setScalar(0.01);
   gunMount.position.set(0, 0.065 / 100, -0.015 / 100);
   gunMount.rotation.set(1.41, Math.PI - 0.03, -0.04);
-  const hand = inner.getObjectByName('DEF-handR') || inner.getObjectByName('DEF-hand.R');
+  const hand = bone(inner, 'DEF-hand.R');
   if (hand) {
     hand.add(gunMount);
   }
 
+  // ── clothes. One merged prop per joint, so a dressed character is at most three
+  // draw calls dearer than a bare mannequin.
+  const outfit = look.outfit ?? 'street';
+  const kit = buildOutfit(outfit, look.hat ?? defaultHat(outfit), look, SKULL_TOP.animated);
+  const props: THREE.Mesh[] = [];
+  const dress = (boneName: string, geo: THREE.BufferGeometry | null): void => {
+    if (!geo) return;
+    const at = bone(inner, boneName);
+    if (!at) { geo.dispose(); return; }
+    const mesh = new THREE.Mesh(geo, humanoidMaterial());
+    mesh.castShadow = true;
+    mesh.frustumCulled = false;   // it rides a skinned bone, like the body
+    socket(at, look.scale).add(mesh);
+    props.push(mesh);
+    meshes.push(mesh);
+  };
+  dress('DEF-hips', kit.hips);
+  dress('DEF-spine.003', kit.chest);
+  dress('DEF-head', kit.head);
+
+  // ── the arms, for putting both hands on a rifle
+  root.updateMatrixWorld(true);
+  const upperL = bone(inner, 'DEF-upper_arm.L');
+  const lowerL = bone(inner, 'DEF-forearm.L');
+  const handL = bone(inner, 'DEF-hand.L');
+  const upperR = bone(inner, 'DEF-upper_arm.R');
+  const lowerR = bone(inner, 'DEF-forearm.R');
+  let armIK: ArmRig | null = null;
+  if (upperL && lowerL && handL && upperR && lowerR) {
+    const a = upperL.getWorldPosition(new THREE.Vector3());
+    const b = lowerL.getWorldPosition(new THREE.Vector3());
+    const c = handL.getWorldPosition(new THREE.Vector3());
+    armIK = {
+      upperL, lowerL, upperR, lowerR,
+      l1: a.distanceTo(b),
+      // to the palm, not the wrist bone, so the hand closes on the grip rather than
+      // hovering a centimetre short of it
+      l2: b.distanceTo(c) + 0.035 * look.scale,
+      axis: BONE_UP,
+    };
+  }
+
+  // ── where a shouldered weapon hangs: on the body, in character space, so one set of
+  // numbers serves both rigs and no animation clip can tilt the muzzle.
+  const rifleMount = new THREE.Object3D();
+  rifleMount.scale.setScalar(look.scale);
+  rifleMount.position.copy(RIFLE_POCKET);
+  root.add(rifleMount);
+
   const stub = (): THREE.Group => new THREE.Group();
   return {
     root,
+    props,
+    armIK,
+    grip: null as GripTarget | null,
+    rifleMount,
+    hold: null as THREE.Object3D | null,
+    pocket: RIFLE_POCKET.clone(),
+    gripW: 0,
     // The animated driver never touches these; they exist for interface parity.
     tilt: stub(), hips: stub(), chest: stub(), head: stub(),
     armL: stub(), armR: stub(), foreL: stub(), foreR: stub(),
@@ -136,7 +253,7 @@ export function createAnimatedHumanoid(look: Look): AnimatedHumanoid {
     gunMount,
     meshes,
     look,
-    phase: 0, aimW: 0, punchT: 0, hitT: 0, bob: 0,
+    phase: 0, aimW: 0, punchT: 0, punchSide: 1, slashing: false, hitT: 0, bob: 0,
     mixer, a,
     loco: a.idle ?? null,
     oneShot: null, oneShotT: 0, deadPlayed: false,
@@ -231,9 +348,30 @@ export function poseAnimated(ch: AnimatedHumanoid, p: PoseInput): void {
   }
 
   ch.mixer.update(dt);
+
+  // Last, on top of the clip: the mannequin's only aiming animation is a pistol stance,
+  // and it has no idea how long an AK is. A shouldered weapon is placed on the chest and
+  // both hands are solved onto it instead.
+  if (ch.armIK) holdWeapon(ch, p, ch.armIK);
 }
 
+/**
+ * Free what this character actually owns.
+ *
+ * Deliberately **not** the body geometry: `SkeletonUtils.clone` shares the mannequin's
+ * buffers between every character in the game, so the old blanket
+ * `meshes.forEach(m => m.geometry.dispose())` threw away the shared vertex buffers every
+ * time a single pedestrian walked out of range, forcing a full re-upload of the mannequin
+ * for everyone still on screen. The materials are per-character clones and the clothing is
+ * built fresh per character, so those two are ours to release.
+ */
 export function disposeAnimatedHumanoid(ch: AnimatedHumanoid): void {
   ch.mixer.stopAllAction();
   ch.mixer.uncacheRoot(ch.mixer.getRoot());
+  for (const m of ch.props) m.geometry.dispose();
+  for (const m of ch.meshes) {
+    if (ch.props.includes(m)) continue;
+    const mats = Array.isArray(m.material) ? m.material : [m.material];
+    for (const x of mats) x.dispose();
+  }
 }

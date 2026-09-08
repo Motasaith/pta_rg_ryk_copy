@@ -13,14 +13,16 @@
  */
 
 /**
- * Bumped to 3 when maps became selectable.
+ * Bumped to 3 when maps became selectable, and to 4 when the Carry Daba joined the traffic.
  *
  * A version 2 client has exactly one world and no idea another exists, so it would join
  * a room happily and then play a completely different city from everyone else — which is
  * indistinguishable from "the other player got a broken game". Rejecting it outright and
- * telling them to reload is the only honest outcome.
+ * telling them to reload is the only honest outcome. Version 3 has the same problem in
+ * miniature: a vehicle kind it has never heard of arrives as an index off the end of its
+ * own list, and every Carry Daba in the city becomes whatever it decides that means.
  */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 /** Free-roam room cap. Bandwidth is linear in this, so it is deliberately modest. */
 export const MAX_PLAYERS = 8;
@@ -151,6 +153,9 @@ export interface PlayerState {
  */
 export const VEH_KINDS = [
   'sedan', 'hatch', 'suv', 'van', 'sports', 'police', 'rickshaw', 'muscle', 'hyper', 'truck',
+  // Append only. The index is what goes on the wire, so reordering this list silently
+  // turns everybody else's traffic into different cars.
+  'carry',
 ] as const;
 
 export interface CarState {

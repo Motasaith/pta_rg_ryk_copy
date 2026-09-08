@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { clamp, damp, lerp, TAU } from './mathx';
 import { animatedHumansAvailable, createAnimatedHumanoid, disposeAnimatedHumanoid, poseAnimated, AnimatedHumanoid } from './characters';
+import { buildOutfit, defaultHat, SKULL_TOP, type Hat, type Outfit } from './outfits';
+import { applyWorldRotation, makeTwoBone, solveTwoBone } from './ik';
 
 /**
  * A jointed humanoid built from capsules, with proportions taken from a 1.78m adult:
@@ -18,12 +20,55 @@ export interface Look {
   hair: number;
   shoes: number;
   scale: number;
+  /** What they are wearing. Absent means the plain shirt-and-trousers of the old crowd. */
+  outfit?: Outfit;
+  /** Headwear. Absent means whatever the outfit implies (a cap for police, nothing else). */
+  hat?: Hat;
 }
 
 export const SKINS = [0xf0c69a, 0xdba875, 0xc08a5c, 0xa06e45, 0x8b5a35, 0xf6d5ae];
 export const SHIRTS = [0xc94f4f, 0x3f6fb5, 0x2e8b57, 0xe0a53c, 0xf0f0ea, 0x8e5aa8, 0x2b3a4a, 0xd97c3a, 0x4f7f8c, 0xb3564e];
 export const PANTS = [0x2f3a4a, 0x3b3b44, 0x4a4038, 0x28405c, 0x554a3a, 0x1f2630];
 export const HAIRS = [0x24170f, 0x3a2416, 0x120d0a, 0x51341c];
+
+/** Where the off hand goes, and whether it goes there at rest or only while aiming. */
+export interface GripTarget {
+  at: THREE.Object3D;
+  atRest: boolean;
+}
+
+/**
+ * Where a shouldered weapon sits, relative to the chest joint.
+ *
+ * This exists because of a measurement. With the rifle hanging off the right hand and
+ * the hand out at arm's length — which is what the aim pose and the mannequin's
+ * `Pistol_Idle_Loop` clip both do — the AK's handguard ended up **0.71m from the left
+ * shoulder**, and an arm in this game is 0.58m long. No amount of IK reaches that; the
+ * support hand can only ever hang in the air near it.
+ *
+ * So a gun is not held at the end of an arm at all. It is mounted here, in the shoulder
+ * pocket, aimed by pitching this socket, and *both* arms are then solved onto it: the
+ * right hand onto the firing grip, the left onto the handguard. That is also simply what
+ * shouldering a rifle is.
+ *
+ * Measured from the feet, and hung off the body root rather than the chest. Hanging it
+ * off the chest was the obvious thing and it was wrong: on the animated rig the chest
+ * bone carries whatever lean the idle clip has, so the RPG came out pointing at the
+ * player's own feet. A gun has to point where the camera points, not where the
+ * breathing animation does.
+ */
+export const RIFLE_POCKET = new THREE.Vector3(0.10, 1.295, 0.24);
+/**
+ * How far the muzzle drops when they are not actually aiming at anything. Small: at half
+ * a radian the RPG's 0.85m tube reaches the pavement.
+ */
+const LOW_READY = 0.34;
+/**
+ * Where the weapon goes when nobody is being aimed at: down and in, towards the hip.
+ * Without this an armed pedestrian walks around permanently at the ready, which reads as
+ * a threat rather than as somebody carrying a gun.
+ */
+const REST_DROP = new THREE.Vector3(0.02, -0.20, -0.11);
 
 export interface Humanoid {
   root: THREE.Group;
@@ -40,14 +85,33 @@ export interface Humanoid {
   shinL: THREE.Group;
   shinR: THREE.Group;
   gunMount: THREE.Object3D;
+  /**
+   * The support-hand target of whatever they are holding, or null for empty hands and
+   * one-handed weapons. Set where the weapon is attached; read by the pose code, which
+   * solves the left arm onto it.
+   */
+  grip: GripTarget | null;
+  /**
+   * Where a shouldered weapon hangs. Two-handed weapons parent here instead of to the
+   * hand, and the right arm is solved onto them; see RIFLE_POCKET.
+   */
+  rifleMount: THREE.Object3D;
+  /** The firing grip of a shouldered weapon — the right hand's target, or null. */
+  hold: THREE.Object3D | null;
+  /** Where this particular weapon rides on the chest when aimed. Set on equip. */
+  pocket: THREE.Vector3;
   meshes: THREE.Mesh[];
   look: Look;
   /** animation state */
   phase: number;
   aimW: number;
   punchT: number;
+  punchSide: number;
+  slashing: boolean;
   hitT: number;
   bob: number;
+  /** How much of the support-hand solve is applied, 0..1. Ramps so holstering is smooth. */
+  gripW: number;
 }
 
 const HIP_Y = 0.93;
@@ -120,10 +184,17 @@ export function createHumanoid(look: Look): Humanoid {
   tilt.add(hips);
   const meshes: THREE.Mesh[] = [];
 
+  // What they are wearing, as geometry. Merged into the joints below, so a dressed
+  // character costs the same eleven draw calls an undressed one does.
+  const outfit = look.outfit ?? 'street';
+  const hat = look.hat ?? defaultHat(outfit);
+  const kit = buildOutfit(outfit, hat, look, SKULL_TOP.capsule);
+
   // ── pelvis + abdomen (rotates with the hips)
   part(hips, [
     at(capsule(0.145, 0.1, look.pants), 0, -0.02, 0, 1.14, 1, 0.82),
     at(capsule(0.15, 0.14, look.shirt), 0, 0.15, 0, 1.1, 1, 0.8),
+    ...(kit.hips ? [kit.hips] : []),
   ], meshes);
 
   // ── chest (spine twist happens here, which is what makes aiming read)
@@ -136,6 +207,7 @@ export function createHumanoid(look: Look): Humanoid {
     at(sphereg(0.085, look.shirt, 8, 6), -0.2, 0.19, 0),        // shoulder caps
     at(sphereg(0.085, look.shirt, 8, 6), 0.2, 0.19, 0),
     at(boxg(0.34, 0.12, 0.2, look.shirt), 0, 0.13, 0.03),       // collar/chest fill
+    ...(kit.chest ? [kit.chest] : []),
   ], meshes);
 
   // ── head
@@ -152,6 +224,7 @@ export function createHumanoid(look: Look): Humanoid {
     at(boxg(0.19, 0.045, 0.03, look.hair), 0, 0.055, 0.115),     // fringe
     at(sphereg(0.035, look.skin, 6, 5), -0.122, 0.01, 0),        // ears
     at(sphereg(0.035, look.skin, 6, 5), 0.122, 0.01, 0),
+    ...(kit.head ? [kit.head] : []),
   ], meshes);
 
   // ── arms: shoulder → elbow → (forearm + hand)
@@ -171,10 +244,15 @@ export function createHumanoid(look: Look): Humanoid {
   };
   const aL = mkArm(-1), aR = mkArm(1);
 
-  // weapons hang off the right hand
+  // one-handed weapons hang off the right hand
   const gunMount = new THREE.Object3D();
   gunMount.position.set(0, -FOREARM - 0.03, 0.03);
   aR.el.add(gunMount);
+
+  // guns are shouldered instead, and the arms come to them
+  const rifleMount = new THREE.Object3D();
+  rifleMount.position.copy(RIFLE_POCKET);
+  root.add(rifleMount);
 
   // ── legs: hip → knee → (shin + foot)
   const mkLeg = (side: number) => {
@@ -200,8 +278,9 @@ export function createHumanoid(look: Look): Humanoid {
     root, tilt, hips, chest, head,
     armL: aL.sh, armR: aR.sh, foreL: aL.el, foreR: aR.el,
     legL: lL.hp, legR: lR.hp, shinL: lL.kn, shinR: lR.kn,
-    gunMount, meshes, look,
-    phase: Math.random() * TAU, aimW: 0, punchT: 0, hitT: 0, bob: 0,
+    gunMount, grip: null, rifleMount, hold: null, pocket: RIFLE_POCKET.clone(), meshes, look,
+    phase: Math.random() * TAU, aimW: 0, punchT: 0, punchSide: 1, slashing: false, hitT: 0, bob: 0,
+    gripW: 0,
   };
 }
 
@@ -222,6 +301,10 @@ export interface PoseInput {
   crouching?: boolean;
   /** 0..1 punch swing */
   punch: number;
+  /** which hand throws it: +1 right, -1 left. Alternating hands is what makes a combo. */
+  punchSide?: number;
+  /** a blade is swung in an arc, not jabbed straight out like a fist. */
+  slash?: boolean;
   /** counts down after being shot */
   flinch: number;
   /** steering input while driving, −1..1 */
@@ -306,8 +389,12 @@ export function poseHumanoid(h: Humanoid, p: PoseInput): void {
   h.head.rotation.z = -h.hips.rotation.z * 0.5 + lookY * 0.06;
 
   // ── arms
-  h.punchT = Math.max(0, h.punchT - dt * 3.4);
-  if (p.punch > 0) h.punchT = 1;
+  h.punchT = Math.max(0, h.punchT - dt * (p.slash ? 3.9 : 4.6));
+  if (p.punch > 0) {
+    h.punchT = 1;
+    h.punchSide = p.punchSide ?? 1;
+    h.slashing = !!p.slash;
+  }
   h.hitT = Math.max(0, p.flinch);
 
   const swingL = -Math.sin(ph) * (0.42 + sr * 0.3) * amp;
@@ -324,24 +411,135 @@ export function poseHumanoid(h: Humanoid, p: PoseInput): void {
   const targetLZ = lerp(-0.06, 0.52, aw);
   const targetLEl = lerp(elbowIdle, -0.62, aw);
 
-  // punch overrides the right arm entirely
+  /*
+   * Melee.
+   *
+   * Two things were wrong with the old version and both were visible immediately: only
+   * the right arm ever moved, so a flurry of clicks was the same jab over and over; and
+   * a blade used the identical straight-out punch, which is not how anyone swings a
+   * knife. Now the hands alternate — that is what makes a combo read as a combo — and a
+   * blade travels in a horizontal arc with the shoulders following it through.
+   */
   const pz = h.punchT;
-  const punchX = lerp(-0.4, -1.6, Math.sin(clamp(pz, 0, 1) * Math.PI));
-  const punchEl = lerp(-1.5, -0.12, Math.sin(clamp(pz, 0, 1) * Math.PI));
+  const swing = Math.sin(clamp(pz, 0, 1) * Math.PI);      // 0 -> 1 -> 0 over the strike
+  const right = h.punchSide >= 0;
+  const punching = pz > 0.01;
 
-  h.armR.rotation.x = damp(h.armR.rotation.x, pz > 0.01 ? punchX : targetRX, 16, dt);
-  h.armR.rotation.z = damp(h.armR.rotation.z, pz > 0.01 ? 0.25 : targetRZ, 16, dt);
-  h.foreR.rotation.x = damp(h.foreR.rotation.x, pz > 0.01 ? punchEl : targetREl, 16, dt);
-  h.armL.rotation.x = damp(h.armL.rotation.x, targetLX, 14, dt);
-  h.armL.rotation.z = damp(h.armL.rotation.z, targetLZ, 14, dt);
-  h.foreL.rotation.x = damp(h.foreL.rotation.x, targetLEl, 14, dt);
+  // straight jab: shoulder drives forward, elbow snaps open
+  const jabX = lerp(-0.4, -1.62, swing);
+  const jabEl = lerp(-1.5, -0.12, swing);
+  // blade: starts drawn back across the body and sweeps through to the far side
+  const slashX = lerp(-0.55, -1.15, swing);
+  const slashZ = lerp(right ? 1.15 : -1.15, right ? -0.75 : 0.75, swing);
+  const slashEl = lerp(-1.75, -0.35, swing);
+
+  const armX = h.slashing ? slashX : jabX;
+  const armZ = h.slashing ? slashZ : (right ? 0.25 : -0.25);
+  const armEl = h.slashing ? slashEl : jabEl;
+
+  const liveR = punching && right;
+  const liveL = punching && !right;
+  h.armR.rotation.x = damp(h.armR.rotation.x, liveR ? armX : targetRX, 18, dt);
+  h.armR.rotation.z = damp(h.armR.rotation.z, liveR ? armZ : targetRZ, 18, dt);
+  h.foreR.rotation.x = damp(h.foreR.rotation.x, liveR ? armEl : targetREl, 18, dt);
+  h.armL.rotation.x = damp(h.armL.rotation.x, liveL ? armX : targetLX, 18, dt);
+  h.armL.rotation.z = damp(h.armL.rotation.z, liveL ? -armZ : targetLZ, 18, dt);
+  h.foreL.rotation.x = damp(h.foreL.rotation.x, liveL ? armEl : targetLEl, 18, dt);
+
+  // the whole body turns into a strike, which is most of what sells the weight of it
+  if (punching) {
+    const turn = swing * (right ? -1 : 1) * (h.slashing ? 0.42 : 0.26);
+    h.chest.rotation.y += turn;
+    h.hips.rotation.y += turn * 0.35;
+  }
 
   if (h.hitT > 0) {
     const f = Math.min(1, h.hitT * 4);
     h.chest.rotation.x -= 0.22 * f;
     h.head.rotation.x -= 0.18 * f;
   }
+
+  holdWeapon(h, p, {
+    upperL: h.armL, lowerL: h.foreL, upperR: h.armR, lowerR: h.foreR,
+    l1: UPPER_ARM, l2: FOREARM + 0.02, axis: DOWN,
+  });
 }
+
+/** The arm bones and their lengths, whichever rig they came from. */
+export interface ArmRig {
+  upperL: THREE.Object3D;
+  lowerL: THREE.Object3D;
+  upperR: THREE.Object3D;
+  lowerR: THREE.Object3D;
+  l1: number;
+  l2: number;
+  axis: THREE.Vector3;
+}
+
+/** The capsule rig hangs its arms downwards; the glTF skeleton points its bones up. */
+const DOWN = new THREE.Vector3(0, -1, 0);
+export const BONE_UP = new THREE.Vector3(0, 1, 0);
+
+const _shoulder = new THREE.Vector3();
+const _target = new THREE.Vector3();
+const _pole = new THREE.Vector3();
+const _sol = makeTwoBone();
+
+/**
+ * Put the left hand on the weapon.
+ *
+ * Shared by both rigs because the problem is identical: the animation (or the pose code)
+ * has no idea how long the gun is, so the off hand has to be solved rather than keyframed.
+ * `weight` ramps so holstering does not snap the arm.
+ *
+ * The pole vector points down, back and outboard — that is where a human elbow goes when
+ * they shoulder a rifle, and without it the solver is free to pick the mirror-image
+ * solution with the elbow folded up through the ribs.
+ */
+export function holdWeapon(h: Humanoid, p: PoseInput, arms: ArmRig): void {
+  const want = (h.grip || h.hold) && p.dead <= 0 && !p.seated && h.punchT <= 0.01
+    && (h.grip?.atRest || h.hold !== null || p.aiming);
+  h.gripW = damp(h.gripW, want ? 1 : 0, 12, p.dt);
+  if (h.gripW < 0.02) return;
+
+  // Aim the shouldered weapon before solving to it: the arms follow the gun, not the
+  // other way round, which is why the muzzle tracks the camera exactly.
+  if (h.hold) {
+    const pitch = p.aiming ? -p.aimPitch : LOW_READY;
+    h.rifleMount.rotation.x = damp(h.rifleMount.rotation.x, pitch, 12, p.dt);
+    h.rifleMount.rotation.y = damp(h.rifleMount.rotation.y, p.aiming ? -0.06 : -0.22, 10, p.dt);
+    _rest.copy(h.pocket);
+    if (!p.aiming) _rest.add(REST_DROP);
+    h.rifleMount.position.x = damp(h.rifleMount.position.x, _rest.x, 10, p.dt);
+    h.rifleMount.position.y = damp(h.rifleMount.position.y, _rest.y, 10, p.dt);
+    h.rifleMount.position.z = damp(h.rifleMount.position.z, _rest.z, 10, p.dt);
+  }
+
+  h.root.updateMatrixWorld(true);
+  h.root.getWorldQuaternion(_q);
+
+  if (h.hold) {
+    // Right hand onto the firing grip. Elbow down, back and outboard — the classic
+    // shooting stance, and the side of the mirror solution that is not a broken arm.
+    arms.upperR.getWorldPosition(_shoulder);
+    h.hold.getWorldPosition(_target);
+    _pole.set(1, -0.5, -0.75).applyQuaternion(_q).normalize();
+    solveTwoBone(_shoulder, _target, _pole, arms.l1, arms.l2, arms.axis, _sol);
+    applyWorldRotation(arms.upperR, _sol.upper, h.gripW);
+    applyWorldRotation(arms.lowerR, _sol.lower, h.gripW);
+  }
+
+  if (h.grip && (h.grip.atRest || p.aiming)) {
+    arms.upperL.getWorldPosition(_shoulder);
+    h.grip.at.getWorldPosition(_target);
+    _pole.set(-1, -0.5, -0.75).applyQuaternion(_q).normalize();
+    solveTwoBone(_shoulder, _target, _pole, arms.l1, arms.l2, arms.axis, _sol);
+    applyWorldRotation(arms.upperL, _sol.upper, h.gripW);
+    applyWorldRotation(arms.lowerL, _sol.lower, h.gripW);
+  }
+}
+const _q = new THREE.Quaternion();
+const _rest = new THREE.Vector3();
 
 function poseDead(h: Humanoid, d: number, dt: number): void {
   h.tilt.rotation.x = damp(h.tilt.rotation.x, -1.57, 9, dt);
@@ -392,7 +590,13 @@ export function setHumanoidDetail(h: Humanoid, visible: boolean, shadows: boolea
 
 export function disposeHumanoid(h: Humanoid): void {
   const anim = h as AnimatedHumanoid;
-  if (anim.mixer) disposeAnimatedHumanoid(anim);
+  if (anim.mixer) {
+    // The animated rig shares its geometry with every other character; only
+    // disposeAnimatedHumanoid knows which buffers belong to this one.
+    disposeAnimatedHumanoid(anim);
+    h.root.removeFromParent();
+    return;
+  }
   for (const m of h.meshes) m.geometry.dispose();
   h.root.removeFromParent();
 }

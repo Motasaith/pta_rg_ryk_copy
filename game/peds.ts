@@ -50,6 +50,14 @@ const COP_RUN = 5.8;
 /** An angry driver runs you down a bit slower than a panicking one runs away. */
 const AGGRO_RUN = 4.6;
 
+/** Darken a packed colour. */
+function shade(hex: number, k: number): number {
+  const r = Math.round(((hex >> 16) & 255) * k);
+  const g = Math.round(((hex >> 8) & 255) * k);
+  const b = Math.round((hex & 255) * k);
+  return (r << 16) | (g << 8) | b;
+}
+
 export class PedManager {
   peds: Ped[] = [];
   /** Someone has shouted at the player. The engine turns this into a bark and a toast. */
@@ -72,18 +80,26 @@ export class PedManager {
       return {
         skin: pick(r, SKINS), shirt: 0x14171c, pants: 0x14171c,
         hair: 0x0d0f13, shoes: 0x0b0d10, scale: 1.02 + r() * 0.03,
+        outfit: 'swat',
       };
     }
     if (cop) {
+      // Punjab Police: near-black uniform, peaked cap, white patrol belt. The belt and
+      // the cap are what actually identify an officer at a distance — the colour alone
+      // used to be a slightly navier civilian.
       return {
-        skin: pick(r, SKINS), shirt: 0x1c2f52, pants: 0x22262e,
+        skin: pick(r, SKINS), shirt: 0x23272f, pants: 0x1c1f26,
         hair: 0x15100c, shoes: 0x101216, scale: 0.99 + r() * 0.03,
+        outfit: 'police',
       };
     }
     return {
       skin: pick(r, SKINS), shirt: pick(r, SHIRTS), pants: pick(r, PANTS),
       hair: pick(r, HAIRS), shoes: pick(r, [0x24262b, 0x3b2b20, 0xf0f0ec]),
       scale: 0.93 + r() * 0.14,
+      outfit: 'street',
+      // a topi on a fifth of them, which is about right for a weekday afternoon
+      hat: r() < 0.2 ? 'topi' : 'none',
     };
   }
 
@@ -94,7 +110,14 @@ export class PedManager {
     this.scene.add(h.root);
     if (cop) {
       const w = createWeaponModel(swat ? 'ak47' : 'pistol');
-      if (w) h.gunMount.add(w.group);
+      if (w) {
+        (w.pocket ? h.rifleMount : h.gunMount).add(w.group);
+        if (w.foregrip) h.grip = { at: w.foregrip, atRest: w.supportAtRest };
+        if (w.pocket) {
+          h.hold = w.group;
+          h.pocket.copy(w.pocket);
+        }
+      }
     }
     const ped: Ped = {
       h, cop, swat,

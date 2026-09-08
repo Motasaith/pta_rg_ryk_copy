@@ -6,7 +6,7 @@ import { Humanoid } from './humanoid';
 import { tex } from './materials';
 import type { AssetBank } from './assets';
 
-export type VehKind = 'sedan' | 'hatch' | 'suv' | 'van' | 'sports' | 'police' | 'rickshaw' | 'muscle' | 'hyper' | 'truck';
+export type VehKind = 'sedan' | 'hatch' | 'suv' | 'van' | 'sports' | 'police' | 'rickshaw' | 'muscle' | 'hyper' | 'truck' | 'carry';
 
 export interface VehSpec {
   maxSpeed: number;      // m/s
@@ -51,6 +51,17 @@ export const SPECS: Record<VehKind, VehSpec> = {
   muscle:   { maxSpeed: 62, reverseMax: 12, accel: 10.4, brake: 26, grip: 7.8, driftGrip: 2.3, wheelbase: 2.9, maxSteer: 0.5, halfL: 2.35, halfW: 1.02, height: 1.38, wheelR: 0.37, seat: [-0.42, 0.58, 0.2], camBack: 8, camUp: 2.9, mass: 1600, name: 'MUSCLE', boostTime: 4.5, boostPower: 1.7, cls: 'muscle' },
   sports:   { maxSpeed: 71, reverseMax: 12, accel: 13.2, brake: 30, grip: 9.6, driftGrip: 1.9, wheelbase: 2.6, maxSteer: 0.52, halfL: 2.15, halfW: 1, height: 1.25, wheelR: 0.34, seat: [-0.4, 0.5, 0.15], camBack: 7.6, camUp: 2.6, mass: 1250, name: 'SPORTS', boostTime: 5, boostPower: 1.8, cls: 'super' },
   truck:    { maxSpeed: 24, reverseMax: 6, accel: 3.4, brake: 13, grip: 5.2, driftGrip: 1.2, wheelbase: 4.6, maxSteer: 0.4, halfL: 4.3, halfW: 1.32, height: 3.7, wheelR: 0.54, seat: [-0.62, 1.72, 2.2], camBack: 13, camUp: 5.4, mass: 9000, name: 'BEDFORD TRUCK', boostTime: 1.5, boostPower: 1.12, cls: 'utility' },
+  /**
+   * The Carry Daba — a Suzuki Bolan, and the single most common vehicle on a Pakistani
+   * street: school van, ambulance, delivery truck and family car all at once.
+   *
+   * Real numbers, because the shape is the whole point of it: 3.37m long, 1.40m wide,
+   * 1.84m tall, on a 1.84m wheelbase and 12-inch wheels. That is a box as tall as it is
+   * long-ish with the wheels pushed right into the corners, and no bonnet at all — the
+   * driver sits over the front axle, which is why the windscreen is at the very front.
+   * 796cc, so it is slow, and it rolls, and both of those are correct.
+   */
+  carry:    { maxSpeed: 26, reverseMax: 8, accel: 4.0, brake: 17, grip: 5.6, driftGrip: 1.25, wheelbase: 1.84, maxSteer: 0.64, halfL: 1.69, halfW: 0.70, height: 1.84, wheelR: 0.28, seat: [-0.34, 0.98, 0.62], camBack: 7.6, camUp: 3.5, mass: 850, name: 'CARRY DABA', boostTime: 1.8, boostPower: 1.15, cls: 'service' },
   hyper:    { maxSpeed: 94, reverseMax: 13, accel: 18, brake: 34, grip: 11.5, driftGrip: 2.1, wheelbase: 2.75, maxSteer: 0.46, halfL: 2.3, halfW: 1.05, height: 1.14, wheelR: 0.35, seat: [-0.38, 0.46, 0.1], camBack: 8.6, camUp: 2.5, mass: 1300, name: 'HYPERCAR', boostTime: 6, boostPower: 2.0, cls: 'hyper' },
 };
 
@@ -98,6 +109,17 @@ export interface Vehicle {
   alarmT: number;
   /** Seconds of shredded tyres left after a spike strip: less grip, less top speed. */
   spikeT: number;
+  /**
+   * Seconds left before a wrecked car goes up. 0 while it is still healthy.
+   *
+   * A written-off car did not previously do anything at all: health fell to zero and it
+   * carried on driving. Now it dies like a GTA car does — engine out, black smoke, a
+   * few seconds of burning, then the bang.
+   */
+  burnT: number;
+  /** STUNTMAN: nothing dents it. Rides on the car, not the player, so a car you abandon
+   *  keeps its plating and the one you steal next gets it too. */
+  armoured: boolean;
   /**
    * Seconds left of the drift window opened by yanking the handbrake.
    *
@@ -227,9 +249,12 @@ export function createVehicle(kind: VehKind, colour: number): Vehicle {
     parts.push(pbox(W * 2.06, 0.5, 0.36, chrome, 0, sillY + 0.62, L - 0.22));          // front bumper
     parts.push(pbox(W * 1.7, 0.7, 0.14, chrome, 0, sillY + 1.2, L - 0.42));            // grille
     for (const sx of [-1, 1]) {
-      parts.push(pbox(0.26, 0.26, 0.16, 0xfff4d0, sx * W * 1.3, sillY + 1.05, L - 0.3));  // lamps
-      parts.push(pbox(0.07, 0.07, 1.1, chrome, sx * (W * 2.05), sillY + 2.4, L - 2.2));   // mirror stalks
-      parts.push(pbox(0.1, 0.42, 0.3, 0x22262b, sx * (W * 2.4), sillY + 2.5, L - 1.75));
+      // inside the bumper, which is W * 2.06 across, so W * 0.86 rather than W * 1.3
+      parts.push(pbox(0.26, 0.26, 0.16, 0xfff4d0, sx * W * 0.86, sillY + 1.05, L - 0.3));  // lamps
+      // W * 1.12, not W * 2.05. These are *positions*, and the cargo body is only W * 2.1
+      // wide — at the old numbers the mirrors hung a metre and a half clear of the truck.
+      parts.push(pbox(0.07, 0.07, 1.1, chrome, sx * (W * 1.12), sillY + 2.4, L - 2.2));   // mirror stalks
+      parts.push(pbox(0.1, 0.42, 0.3, 0x22262b, sx * (W * 1.19), sillY + 2.5, L - 1.75));
     }
     // crown over the cab
     parts.push(pbox(W * 2.1, 0.9, 0.5, colour, 0, sillY + 3.35, L - 3.6));
@@ -241,8 +266,36 @@ export function createVehicle(kind: VehKind, colour: number): Vehicle {
     parts.push(pbox(W * 2.1, 0.24, L * 1.35, 0x3a3f45, 0, sillY + 0.62, -L * 0.28));   // bed floor
     parts.push(pbox(W * 2.1, 0.28, 1.0, chrome, 0, sillY + 2.9, -L * 0.95));           // top rail
     // mudflaps + chain fringe
-    for (const sx of [-1, 1]) parts.push(pbox(0.5, 0.6, 0.06, 0x1a1d20, sx * W * 1.2, sillY + 0.2, -L + 0.1));
+    for (const sx of [-1, 1]) parts.push(pbox(0.5, 0.6, 0.06, 0x1a1d20, sx * W, sillY + 0.2, -L + 0.1));
     for (let i = -5; i <= 5; i++) parts.push(pbox(0.05, 0.34, 0.05, chrome, i * 0.24, sillY + 0.45, -L + 0.02));
+  } else if (kind === 'carry') {
+    // One tall box with a flat face. There is no bonnet and barely any overhang, so the
+    // silhouette is the body filling almost the whole footprint and the wheels tucked into
+    // the corners underneath it.
+    const rack = 0xb9c2c9;
+    const bodyH = 1.32;
+    const roofY = sillY + 0.14 + bodyH;
+    parts.push(taper(pbox(W * 2, bodyH, L * 2 - 0.06, colour, 0, sillY + 0.14 + bodyH / 2, 0), 0.94, 0.98, 0));
+    parts.push(pbox(W * 1.94, 0.07, L * 1.94, colour, 0, roofY, 0));
+    // The roof rack. Every one of them has one, usually with something tied to it.
+    parts.push(pbox(W * 1.72, 0.04, L * 1.5, rack, 0, roofY + 0.14, -L * 0.08));
+    for (const sx of [-1, 1]) {
+      parts.push(pbox(0.04, 0.14, L * 1.5, rack, sx * W * 0.84, roofY + 0.09, -L * 0.08));
+      parts.push(pbox(0.05, 0.13, 0.05, rack, sx * W * 0.84, roofY + 0.07, L * 0.66));
+      parts.push(pbox(0.05, 0.13, 0.05, rack, sx * W * 0.84, roofY + 0.07, -L * 0.82));
+    }
+    // The sliding side door, and the split at the back — the two lines you actually read.
+    for (const sx of [-1, 1]) {
+      parts.push(pbox(0.03, bodyH * 0.82, 0.05, dark, sx * W * 1.01, sillY + 0.5, L * 0.12));
+      parts.push(pbox(0.03, bodyH * 0.82, 0.05, dark, sx * W * 1.01, sillY + 0.5, -L * 0.62));
+      parts.push(pbox(0.1, 0.12, 0.2, dark, sx * (W * 1.02 + 0.05), sillY + 1.0, L * 0.78));  // mirrors
+    }
+    parts.push(pbox(0.04, bodyH * 0.9, 0.05, dark, 0, sillY + 0.55, -L + 0.02));
+    // bumpers, and the grille slot under the windscreen
+    parts.push(pbox(W * 2.02, 0.22, 0.16, dark, 0, sillY + 0.2, L - 0.04));
+    parts.push(pbox(W * 2.02, 0.22, 0.16, dark, 0, sillY + 0.2, -L + 0.04));
+    parts.push(pbox(W * 1.5, 0.1, 0.06, dark, 0, sillY + 0.42, L - 0.01));
+    parts.push(pbox(0.06, 0.06, 0.28, dark, W * 0.6, sillY + 0.02, -L + 0.02));
   } else if (kind === 'rickshaw') {
     parts.push(pbox(W * 1.9, 0.5, L * 1.5, colour, 0, sillY + 0.3, -0.2));
     parts.push(taper(pbox(W * 1.8, 0.9, L * 1.2, colour, 0, sillY + 1, -0.3), 0.8, 0.85, 0.2));
@@ -298,15 +351,38 @@ export function createVehicle(kind: VehKind, colour: number): Vehicle {
       m.castShadow = true;
       bodyPivot.add(m);
     };
-    panel(0.1, 2.3, L * 1.3, -W * 2.02, sillY + 1.85, -L * 0.28);   // left side
-    panel(0.1, 2.3, L * 1.3, W * 2.02, sillY + 1.85, -L * 0.28);    // right side
-    panel(W * 4, 2.3, 0.12, 0, sillY + 1.85, -L * 0.99);            // tailgate
+    // Hung on the sides of the cargo body, which is W * 2.1 across — so the panels belong
+    // at x = ±W * 1.06, not ±W * 2.02. At the old offset the art floated 1.3m out in the
+    // air on either side of the truck, wider than the truck itself was long is tall.
+    panel(0.1, 2.3, L * 1.3, -W * 1.06, sillY + 1.85, -L * 0.28);   // left side
+    panel(0.1, 2.3, L * 1.3, W * 1.06, sillY + 1.85, -L * 0.28);    // right side
+    panel(W * 2.06, 2.3, 0.12, 0, sillY + 1.85, -L * 0.99);         // tailgate
     panel(W * 2.05, 0.8, 0.12, 0, sillY + 3.35, L - 3.9);           // crown face
     panel(W * 1.4, 0.42, 0.1, 0, sillY + 0.72, L - 0.44);           // bonnet plate
   }
 
+  if (kind === 'carry') {
+    // Nearly vertical, right at the front of the vehicle, and full width: this is the
+    // face of the thing. The generic path below assumes a bonnet to set the screen back
+    // behind, which a cab-over van does not have.
+    const gp: THREE.BufferGeometry[] = [
+      paint(new THREE.BoxGeometry(W * 1.78, 0.72, 0.05), 0xffffff),
+      paint(new THREE.BoxGeometry(W * 1.7, 0.6, 0.05), 0xffffff),
+      paint(new THREE.BoxGeometry(0.05, 0.56, L * 0.72), 0xffffff),
+      paint(new THREE.BoxGeometry(0.05, 0.56, L * 0.72), 0xffffff),
+    ];
+    gp[0].rotateX(-0.16);
+    gp[0].translate(0, sillY + 1.06, L - 0.09);
+    gp[1].rotateX(0.1);
+    gp[1].translate(0, sillY + 1.0, -L + 0.08);
+    gp[2].translate(-W * 0.94, sillY + 1.0, L * 0.06);
+    gp[3].translate(W * 0.94, sillY + 1.0, L * 0.06);
+    const gm = new THREE.Mesh(mergeGeometries(gp, false)!, M.glassMat);
+    bodyPivot.add(gm);
+  }
+
   // glazing
-  if (kind !== 'rickshaw' && kind !== 'truck') {
+  if (kind !== 'rickshaw' && kind !== 'truck' && kind !== 'carry') {
     const cabH = CAB_H[kind] ?? 0.78;
     const zc = kind === 'van' ? 0 : -L * 0.12;
     const cabD = kind === 'van' ? L * 1.25 : L * 0.95;
@@ -329,12 +405,18 @@ export function createVehicle(kind: VehKind, colour: number): Vehicle {
   // lamps
   const head: THREE.BufferGeometry[] = [];
   const tail: THREE.BufferGeometry[] = [];
+  // Inset from the corner of the bodywork rather than a fixed multiple of the half-width.
+  // W * 1.2 put the lamp centre 20% *outside* the body, so on every procedurally-bodied
+  // vehicle the headlights floated in mid-air beside the wings — invisible on the sedan
+  // and the rest because those use downloaded models, and very visible on the van.
+  const lampX = Math.max(0.12, W - 0.24);
   for (const sx of [-1, 1]) {
-    const h = new THREE.BoxGeometry(0.34, 0.14, 0.08);
-    h.translate(sx * W * 1.2, sillY + 0.46, L - 0.02);
+    const w = Math.min(0.34, W * 0.44);
+    const h = new THREE.BoxGeometry(w, 0.14, 0.08);
+    h.translate(sx * lampX, sillY + 0.46, L - 0.02);
     head.push(h);
-    const t = new THREE.BoxGeometry(0.3, 0.14, 0.08);
-    t.translate(sx * W * 1.2, sillY + 0.5, -L + 0.02);
+    const t = new THREE.BoxGeometry(w * 0.88, 0.14, 0.08);
+    t.translate(sx * lampX, sillY + 0.5, -L + 0.02);
     tail.push(t);
   }
   const headMesh = new THREE.Mesh(mergeGeometries(head, false)!, M.lightMat);
@@ -574,7 +656,7 @@ function finishVehicle(
     brakeLight, headLight, lightbar,
     x: 0, y: 0, z: 0, yaw: 0, vx: 0, vz: 0, speed: 0, steerAngle: 0, wheelSpin: 0,
     health: 100,
-    spikeT: 0, driftT: 0,
+    spikeT: 0, driftT: 0, burnT: 0, armoured: false,
     boost: 1, boosting: false, boostLock: false,
     ctrl: { throttle: 0, brake: 0, steer: 0, handbrake: false, boost: false },
     driver: null, isPlayer: false, siren: false, alarmT: 0,
@@ -654,7 +736,9 @@ export function stepVehicle(v: Vehicle, dt: number, phys: Physics): void {
   // ── drivetrain
   // Torque falls away with speed and aero drag rises with its square; the drag constant is
   // derived from maxSpeed so the car actually reaches its quoted top speed and no further.
-  const throttle = clamp(c.throttle, 0, 1), brake = clamp(c.brake, 0, 1);
+  // A written-off engine does not drive. It coasts, and it steers, and that is all.
+  const dead = v.health <= 0;
+  const throttle = dead ? 0 : clamp(c.throttle, 0, 1), brake = clamp(c.brake, 0, 1);
   const sp = Math.abs(v.speed);
   // Keyed to the boosted limit so nitrous extends the top end, not just the launch.
   const t01 = clamp(sp / vmax, 0, 1);
@@ -837,7 +921,7 @@ function collide(v: Vehicle, phys: Physics): void {
     const impact = Math.abs(v.speed);
     if (impact > 4) {
       v.crashT = 0.35;
-      v.health -= (impact - 4) * 1.6;
+      if (!v.armoured) v.health -= (impact - 4) * 1.6;
     }
     v.speed *= impact > 8 ? 0.25 : 0.6;
   }
