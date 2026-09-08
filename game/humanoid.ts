@@ -56,8 +56,13 @@ export interface GripTarget {
  * bone carries whatever lean the idle clip has, so the RPG came out pointing at the
  * player's own feet. A gun has to point where the camera points, not where the
  * breathing animation does.
+ *
+ * **x is negative**, and that is not a detail. `rgt()` is (−cos, sin), so a character
+ * facing +Z has their right hand at −x. Every pocket was authored at +x, which parked the
+ * weapon on the character's left while the right hand held it — so on all seven guns the
+ * firing arm reached across the body and its elbow went through the ribcage to get there.
  */
-export const RIFLE_POCKET = new THREE.Vector3(0.10, 1.295, 0.24);
+export const RIFLE_POCKET = new THREE.Vector3(-0.10, 1.295, 0.24);
 /**
  * How far the muzzle drops when they are not actually aiming at anything. Small: at half
  * a radian the RPG's 0.85m tube reaches the pavement.
@@ -68,7 +73,7 @@ const LOW_READY = 0.34;
  * Without this an armed pedestrian walks around permanently at the ready, which reads as
  * a threat rather than as somebody carrying a gun.
  */
-const REST_DROP = new THREE.Vector3(0.02, -0.20, -0.11);
+const REST_DROP = new THREE.Vector3(-0.02, -0.17, -0.04);
 
 export interface Humanoid {
   root: THREE.Group;
@@ -507,7 +512,7 @@ export function holdWeapon(h: Humanoid, p: PoseInput, arms: ArmRig): void {
   if (h.hold) {
     const pitch = p.aiming ? -p.aimPitch : LOW_READY;
     h.rifleMount.rotation.x = damp(h.rifleMount.rotation.x, pitch, 12, p.dt);
-    h.rifleMount.rotation.y = damp(h.rifleMount.rotation.y, p.aiming ? -0.06 : -0.22, 10, p.dt);
+    h.rifleMount.rotation.y = damp(h.rifleMount.rotation.y, p.aiming ? 0.06 : 0.22, 10, p.dt);
     _rest.copy(h.pocket);
     if (!p.aiming) _rest.add(REST_DROP);
     h.rifleMount.position.x = damp(h.rifleMount.position.x, _rest.x, 10, p.dt);
@@ -519,25 +524,44 @@ export function holdWeapon(h: Humanoid, p: PoseInput, arms: ArmRig): void {
   h.root.getWorldQuaternion(_q);
 
   if (h.hold) {
-    // Right hand onto the firing grip. Elbow down, back and outboard — the classic
-    // shooting stance, and the side of the mirror solution that is not a broken arm.
-    arms.upperR.getWorldPosition(_shoulder);
     h.hold.getWorldPosition(_target);
-    _pole.set(1, -0.5, -0.75).applyQuaternion(_q).normalize();
-    solveTwoBone(_shoulder, _target, _pole, arms.l1, arms.l2, arms.axis, _sol);
-    applyWorldRotation(arms.upperR, _sol.upper, h.gripW);
-    applyWorldRotation(arms.lowerR, _sol.lower, h.gripW);
+    reach(h, arms, arms.upperR, arms.lowerR, _target);
   }
 
   if (h.grip && (h.grip.atRest || p.aiming)) {
-    arms.upperL.getWorldPosition(_shoulder);
     h.grip.at.getWorldPosition(_target);
-    _pole.set(-1, -0.5, -0.75).applyQuaternion(_q).normalize();
-    solveTwoBone(_shoulder, _target, _pole, arms.l1, arms.l2, arms.axis, _sol);
-    applyWorldRotation(arms.upperL, _sol.upper, h.gripW);
-    applyWorldRotation(arms.lowerL, _sol.lower, h.gripW);
+    reach(h, arms, arms.upperL, arms.lowerL, _target);
   }
 }
+
+/**
+ * Solve one arm onto a point, with the elbow going where an elbow goes: down, back and
+ * **outboard**.
+ *
+ * Which way "outboard" is gets asked of the rig rather than assumed, and that is the whole
+ * point of this function. The two rigs disagree about handedness: `rgt()` is (−cos, sin),
+ * so a character facing +Z has their left at +X — the glTF skeleton agrees, putting
+ * `DEF-upper_arm.L` at +0.2 once the model's 180° flip is applied, while the capsule rig
+ * builds its `armL` at −0.205, on the other side entirely.
+ *
+ * Hard-coding a pole per named side therefore cannot be right for both, and it was wrong
+ * for the one that ships: both elbows were driven *inwards*, folding each forearm through
+ * the ribcage. The hand still landed on the gun — both elbow solutions reach the same
+ * target, which is exactly why the reach test passed — but the arm was inside the chest,
+ * and a character with an arm inside their chest looks like a character with one arm.
+ */
+function reach(
+  h: Humanoid, arms: ArmRig, upper: THREE.Object3D, lower: THREE.Object3D, target: THREE.Vector3,
+): void {
+  upper.getWorldPosition(_shoulder);
+  _local.copy(_shoulder);
+  h.root.worldToLocal(_local);
+  _pole.set(_local.x >= 0 ? 1 : -1, -0.5, -0.75).applyQuaternion(_q).normalize();
+  solveTwoBone(_shoulder, target, _pole, arms.l1, arms.l2, arms.axis, _sol);
+  applyWorldRotation(upper, _sol.upper, h.gripW);
+  applyWorldRotation(lower, _sol.lower, h.gripW);
+}
+const _local = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _rest = new THREE.Vector3();
 

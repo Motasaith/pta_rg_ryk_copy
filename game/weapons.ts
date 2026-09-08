@@ -207,24 +207,26 @@ type Grip = {
  * Every gun's two hands, and where the gun itself rides.
  *
  * `pocket` is in character space — metres above the feet, on a 1.78m character, facing
- * +Z. These are not decoration: they are what makes the hands reachable. An arm here is
- * 0.58m; the shotgun's pump slide sits 0.36m down the barrel, so parked at arm's length
- * the support hand needed 0.66m of arm and simply hung in the air near it. Each pocket is
- * chosen so both hands are comfortably inside that budget, which the test in
- * `tests/world.test.mjs` checks for all seven guns.
+ * +Z, with **−x the firing-hand side** (see RIFLE_POCKET). These are not decoration: they
+ * are what makes the hands reachable, and reachable without going through the body. An arm
+ * here is 0.58m; the shotgun's pump slide sits 0.36m down the barrel, so parked at arm's
+ * length the support hand needed 0.66m of arm and simply hung in the air near it. And a
+ * pocket on the wrong side of the spine makes the firing arm cross the chest, which looks
+ * exactly like the character has lost an arm. `tests/character.test.mjs` checks both, on
+ * the real rig, for all seven guns, aimed and at rest.
  */
 const GRIP: Partial<Record<WeaponId, Grip>> = {
   // a pistol is punched out in front of the chest and cupped with the off hand only once
   // the shot is being steadied
-  pistol: { at: [-0.032, -0.055, 0.004], pocket: [0.06, 1.26, 0.34], atRest: false },
-  smg: { at: [0, -0.05, 0.19], pocket: [0.10, 1.285, 0.26], atRest: true },
-  ak47: { at: [0, 0.01, 0.265], pocket: [0.10, 1.295, 0.24], atRest: true },
+  pistol: { at: [0.032, -0.055, 0.004], pocket: [-0.06, 1.26, 0.34], atRest: false },
+  smg: { at: [0, -0.05, 0.19], pocket: [-0.10, 1.285, 0.26], atRest: true },
+  ak47: { at: [0, 0.01, 0.265], pocket: [-0.10, 1.295, 0.24], atRest: true },
   // the rear of the pump slide, not the middle of it: 0.36 was out of reach
-  shotgun: { at: [0, -0.025, 0.27], pocket: [0.10, 1.295, 0.24], atRest: true },
-  sniper: { at: [0, -0.055, 0.06], pocket: [0.10, 1.295, 0.24], atRest: true },
+  shotgun: { at: [0, -0.025, 0.27], pocket: [-0.10, 1.295, 0.24], atRest: true },
+  sniper: { at: [0, -0.055, 0.19], pocket: [-0.10, 1.295, 0.24], atRest: true },
   // an RPG rides high, on the shoulder rather than in front of the ribs
-  rpg: { at: [0, -0.065, 0.155], pocket: [0.12, 1.40, 0.18], atRest: true },
-  minigun: { at: [0, 0.08, 0.06], pocket: [0.14, 1.19, 0.24], atRest: true },
+  rpg: { at: [0, -0.055, 0.30], pocket: [-0.12, 1.40, 0.18], atRest: true },
+  minigun: { at: [0, 0.06, 0.22], pocket: [-0.14, 1.19, 0.24], atRest: true },
 };
 
 /**

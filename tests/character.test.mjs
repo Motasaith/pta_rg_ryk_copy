@@ -102,6 +102,29 @@ if (!fs.existsSync(MODEL)) {
       + 'hang by the character\'s side while the gun floated in front of their chest');
     ok(offR < 0.07, `and the firing hand is on the grip, ${(offR * 100).toFixed(1)}cm from it`);
 
+    /* The hand reaching the gun is NOT enough, and believing it was is what shipped a
+       character with one arm. Both elbow solutions put the hand on the same target; only
+       one of them keeps the arm outside the body. With the poles hard-coded per named
+       side they were backwards for this rig and both forearms folded through the ribcage,
+       while every reach assertion above went on passing. */
+    const localOf = (n) => h.root.worldToLocal(at(n));
+    const shoulderL = localOf('DEF-upper_arm.L');
+    const elbowL = localOf('DEF-forearm.L');
+    const shoulderR = localOf('DEF-upper_arm.R');
+    const elbowR = localOf('DEF-forearm.R');
+    ok(shoulderL.x > 0 && shoulderR.x < 0,
+      `this rig puts its L shoulder at x=${shoulderL.x.toFixed(2)} and its R at `
+      + `x=${shoulderR.x.toFixed(2)} — the capsule fallback has them the other way round, which `
+      + 'is why the pole is derived from the rig rather than assumed');
+    // Sign, not distance: an elbow 6cm off the centreline but well forward of the chest is
+    // a perfectly good shooting stance. Whether it is actually *inside* the body is a
+    // volume question, and the ribcage test below is the one that answers it.
+    ok(Math.sign(elbowL.x) === Math.sign(shoulderL.x) && Math.sign(elbowR.x) === Math.sign(shoulderR.x),
+      `each elbow stays on its own side of the spine (L ${elbowL.x.toFixed(2)}, R ${elbowR.x.toFixed(2)}) `
+      + 'rather than swapping over through the chest');
+    ok(Math.abs(elbowL.x - shoulderL.x) < 0.3 && Math.abs(elbowR.x - shoulderR.x) < 0.3,
+      'and neither arm crosses the body to get to the weapon');
+
     // The arms have to have actually moved off the animation clip to get there.
     const bare = createHumanoid(look());
     for (let i = 0; i < 150; i++) poseHumanoid(bare, {
@@ -113,6 +136,61 @@ if (!fs.existsSync(MODEL)) {
     ok(bareL.distanceTo(at('DEF-hand.L')) > 0.1,
       `holding a weapon moves the left hand ${bareL.distanceTo(at('DEF-hand.L')).toFixed(2)}m from `
       + 'where the clip alone would have put it');
+  }
+
+  /* -- nothing may end up inside the ribcage ------------------------------------------
+     "Both hands reach the gun" and "the elbow is on the correct side" are both true of a
+     pose where the whole forearm is buried in the chest, which is what a player actually
+     sees and reports as a missing arm. The only assertion that catches it is a volume one:
+     the torso is roughly a cylinder, and no part of either arm may be inside it. */
+  {
+    const V = () => new THREE.Vector3();
+    const WEAPONS_TO_CHECK = ['pistol', 'smg', 'ak47', 'shotgun', 'sniper', 'rpg', 'minigun'];
+    // The torso is an ellipse, not a circle: broad across the ribs, shallow front to back.
+    // Testing it as a fat cylinder would fail arms that are legitimately out in front.
+    const TORSO_X = 0.18, TORSO_Z = 0.13, TORSO_LO = 0.85, TORSO_HI = 1.5;
+    const insideTorso = (p) => p.y > TORSO_LO && p.y < TORSO_HI
+      && (p.x / TORSO_X) ** 2 + (p.z / TORSO_Z) ** 2 < 1;
+    const buried = [];
+
+    for (const id of WEAPONS_TO_CHECK) {
+      for (const aiming of [true, false]) {
+        const h = createHumanoid(look());
+        const w = createWeaponModel(id);
+        h.pocket.copy(w.pocket);
+        h.rifleMount.add(w.group);
+        h.hold = w.group;
+        h.grip = { at: w.foregrip, atRest: w.supportAtRest };
+        for (let i = 0; i < 200; i++) poseHumanoid(h, {
+          dt: 1 / 60, t: 0, speed: 0, runSpeed: 6, grounded: true, airVy: 0, aiming,
+          aimPitch: 0, dead: 0, seated: false, punch: 0, flinch: 0, steer: 0,
+        });
+        h.root.updateMatrixWorld(true);
+        const inner = h.root.children[0];
+        const local = (n) => h.root.worldToLocal(
+          inner.getObjectByName(n.replace(/\./g, '')).getWorldPosition(V()));
+
+        const parts = {
+          'left elbow': local('DEF-forearm.L'), 'left hand': local('DEF-hand.L'),
+          'right elbow': local('DEF-forearm.R'), 'right hand': local('DEF-hand.R'),
+        };
+        // The support hand is only brought up when the weapon asks for it.
+        const twoHanded = w.supportAtRest || aiming;
+        for (const [name, p] of Object.entries(parts)) {
+          if (!twoHanded && name.startsWith('left')) continue;
+          if (insideTorso(p)) {
+            buried.push(`${id}${aiming ? '' : ' at rest'}: ${name} at x=${p.x.toFixed(2)} z=${p.z.toFixed(2)}`);
+          }
+        }
+        // And the weapon itself has to be out where it can be held.
+        if (insideTorso(h.root.worldToLocal(w.foregrip.getWorldPosition(V())))) {
+          buried.push(`${id}${aiming ? '' : ' at rest'}: the foregrip itself is inside the torso`);
+        }
+      }
+    }
+    ok(!buried.length,
+      `across all ${WEAPONS_TO_CHECK.length} guns, aimed and at rest, no elbow, hand or `
+      + 'grip ends up inside the ribcage', buried.join('; '));
   }
 
   /* -- clothing that hangs off the chest ---------------------------------------------- */

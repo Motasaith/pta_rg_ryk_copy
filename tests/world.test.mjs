@@ -484,8 +484,22 @@ console.log('\nmodels');
       const offR = palm(h, h.foreR).distanceTo(w.group.getWorldPosition(new THREE.Vector3()));
       if (offL > 0.03) missed.push(`${id}: support hand ${(offL * 100).toFixed(1)}cm off the handguard`);
       if (offR > 0.03) missed.push(`${id}: firing hand ${(offR * 100).toFixed(1)}cm off the grip`);
+      // Reaching the gun is only half of it: both elbow solutions do that, and only one
+      // of them keeps the arm out of the ribcage.
+      const eL = h.root.worldToLocal(h.foreL.getWorldPosition(new THREE.Vector3()));
+      const eR = h.root.worldToLocal(h.foreR.getWorldPosition(new THREE.Vector3()));
+      const sL = h.root.worldToLocal(h.armL.getWorldPosition(new THREE.Vector3()));
+      const sR = h.root.worldToLocal(h.armR.getWorldPosition(new THREE.Vector3()));
+      if (Math.sign(eL.x) !== Math.sign(sL.x) || Math.abs(eL.x) < 0.06) {
+        missed.push(`${id}: support elbow folded through the chest (x ${eL.x.toFixed(2)})`);
+      }
+      if (Math.sign(eR.x) !== Math.sign(sR.x) || Math.abs(eR.x) < 0.06) {
+        missed.push(`${id}: firing elbow folded through the chest (x ${eR.x.toFixed(2)})`);
+      }
     }
-    ok(!missed.length, 'both hands land on all six two-handed weapons', missed.join('; '));
+    ok(!missed.length,
+      'both hands land on all six two-handed weapons, with both elbows outside the body',
+      missed.join('; '));
 
     // And nothing drags on the pavement while it is being carried. The RPG's tube is
     // 0.85m long; at the half-radian low-ready angle the first version of this put the
