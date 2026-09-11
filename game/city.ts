@@ -116,6 +116,8 @@ export function buildCity(
   let policeStation = north.police;
   let hospital = north.hospital;
   let playerStart = north.home;
+  /** Every front door in the city that opens. */
+  let homes: { x: number; z: number }[] = [];
   let southEdge: number;
   /** the node each crossing has to reach on the far bank */
   const southLinks: { x: number; w: number; node: RoadNode }[] = [];
@@ -127,6 +129,7 @@ export function buildCity(
     for (const e of scheme.entrances) southLinks.push(e);
     // The player lives on plot 34, off the boulevard.
     playerStart = scheme.home;
+    homes = scheme.homes;
     pois.push({ name: 'HOME', x: scheme.home.x, z: scheme.home.z, kind: 'home' });
   } else {
     const south = district(B, phys, mats, rng, C, preset, SOUTH_CZ, SOUTH_N, seed ^ 0x5bd1);
@@ -211,7 +214,7 @@ export function buildCity(
   return {
     root, nodes, pedLoops: C.pedLoops, parkSpots: C.parkSpots, roadSpawns, shops: C.shops,
     garages: C.garages,
-    pois, minimap, itemSpots: C.itemSpots, pickupSpots: C.pickupSpots, playerStart,
+    pois, minimap, itemSpots: C.itemSpots, pickupSpots: C.pickupSpots, playerStart, homes,
     policeStation, hospital, lampGlow, bounds, waterZones: C.waterZones,
     mapId: theme.id, mapName: theme.name,
     triangles: B.triangles,
@@ -767,14 +770,18 @@ function shopRow(
   shops: Shop[], minimap: MinimapData, signMeshes: THREE.Mesh[], pois: Poi[],
 ): void {
   B.quad(LOT_MAT, cx, LOT_Y, cz, CORE, CORE, 4);
+  // `kind` decides which room you walk into, so a tandoor has to be tagged 'food' or you
+  // open its door and find yourself in a pharmacy. Everything that sells something to eat
+  // was tagged 'health' — true of what it restores, wrong about what the place is — and
+  // the dhaba interior went unreachable as a result.
   const NAMES: [string, Shop['kind'], string][] = [
     ['ZAM ZAM KIRYANA STORE', 'health', '#2e8b57'],
-    ['AL-HABIB TANDOOR & NAAN', 'health', '#b3564e'],
-    ['QUETTA CHAI HOTEL', 'health', '#8a5a33'],
+    ['AL-HABIB TANDOOR & NAAN', 'food', '#b3564e'],
+    ['QUETTA CHAI HOTEL', 'food', '#8a5a33'],
     ['AL-NOOR HARDWARE', 'ammo', '#2b5aa0'],
-    ['MADINA SWEETS & BAKERY', 'health', '#c96a86'],
+    ['MADINA SWEETS & BAKERY', 'food', '#c96a86'],
     ['SHAHEEN MOBILE & EASYLOAD', 'ammo', '#4a5a6a'],
-    ['BISMILLAH BIRYANI', 'health', '#a8451f'],
+    ['BISMILLAH BIRYANI', 'food', '#a8451f'],
     ['NEW PUNCTURE SHOP', 'ammo', '#3f4a52'],
     ['GUJRANWALA CLOTH HOUSE', 'health', '#7a3b8a'],
     ['CHAMAN FRUIT & SABZI', 'health', '#1f7a4a'],

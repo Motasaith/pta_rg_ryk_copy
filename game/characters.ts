@@ -18,6 +18,18 @@ import { buildOutfit, defaultHat, SKULL_TOP } from './outfits';
  * `createHumanoid` keeps building the capsule rig exactly as before.
  */
 
+/**
+ * How the mannequin folds up in the `Driving_Loop` clip: hip height and the top of the
+ * skull, both above the character's root.
+ *
+ * Measured off the model rather than guessed, and `tests/character.test.mjs` re-measures
+ * it on every run so swapping the model cannot silently invalidate it. It matters because
+ * the seating code was using the capsule rig's numbers (hip 0.91, skull 1.65) for both
+ * rigs, and this one sits 37cm more compactly — so every driver was sunk more than a foot
+ * too deep into their seat, with their legs through the floor pan.
+ */
+export const ANIMATED_SEATED = { hip: 0.539, head: 1.484 };
+
 export interface AnimatedHumanoid extends Humanoid {
   /** Clothing hung off the bones. Owned by this character, unlike the shared body. */
   props: THREE.Mesh[];

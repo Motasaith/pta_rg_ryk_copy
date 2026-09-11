@@ -632,6 +632,33 @@ ok(C.nodes.every((n) => n.nb.length >= 2), 'every intersection connects to its n
 ok(C.pedLoops.length === (city.N - 1) * (city.N - 1) + 9,
   `${C.pedLoops.length} pedestrian routes (25 city blocks + 8 scheme kerbs + park)`);
 ok(C.shops.length >= 6, `${C.shops.length} shop counters`);
+// Front doors. There used to be exactly one in the whole map — the plot the player happens
+// to spawn on — so every other house on a street of a hundred was painted scenery, and
+// walking up to one did nothing at all.
+ok(C.homes.length > 50, `${C.homes.length} houses you can let yourself into, not one`);
+ok(C.homes.some((h) => Math.hypot(h.x - C.playerStart.x, h.z - C.playerStart.z) < 1),
+  "and one of them is the player's own front door");
+{
+  // Each door has to be somewhere you can stand, or the prompt can never come up.
+  const stuck = C.homes.filter((h) => {
+    const gy = phys.groundHeight(h.x, h.z, 0.36, 6);
+    return !phys.isFree(h.x, h.z, 0.36, gy, gy + 1.8, null);
+  });
+  ok(stuck.length < C.homes.length * 0.05,
+    `${C.homes.length - stuck.length} of ${C.homes.length} are actually reachable on foot`,
+    `${stuck.length} blocked`);
+}
+// Every kind of shop the city places has to have a room behind its door, and every room
+// built has to be reachable from some door. The dhaba was built and then never used,
+// because every tandoor and chai hotel was tagged 'health' and opened into a pharmacy.
+{
+  const placed = [...new Set(C.shops.map((sh) => sh.kind))].sort();
+  const built = ['ammo', 'health', 'food'];
+  const noRoom = placed.filter((k) => !built.includes(k));
+  const noDoor = built.filter((k) => !placed.includes(k));
+  ok(!noRoom.length, `every kind of shop on the map opens into a room (${placed.join(', ')})`, noRoom.join(', '));
+  ok(!noDoor.length, 'and no shop interior is built that nothing in the city leads to', noDoor.join(', '));
+}
 ok(C.parkSpots.length >= 20, `${C.parkSpots.length} parking spots`);
 ok(C.itemSpots.length >= 8, `${C.itemSpots.length} candidate objective spots`);
 ok(C.pickupSpots.length >= 20, `${C.pickupSpots.length} pickup spots`);

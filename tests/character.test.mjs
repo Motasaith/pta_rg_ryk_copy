@@ -193,6 +193,68 @@ if (!fs.existsSync(MODEL)) {
       + 'grip ends up inside the ribcage', buried.join('; '));
   }
 
+  /* -- sitting in a car ---------------------------------------------------------------
+     The seating code has to know how tall a seated character is, and it was using numbers
+     that describe the *capsule* rig for both. The mannequin folds up 37cm more compactly,
+     so every driver of the rig that actually ships sat a foot below their own seat with
+     their legs through the floor pan. These constants are measured off the model, so
+     re-measure them here: swapping character.glb must not silently invalidate them. */
+  {
+    const V = () => new THREE.Vector3();
+    const { ANIMATED_SEATED } = await import('./characters.js');
+    const { CAPSULE_SEATED, seatMetrics } = await import('./humanoid.js');
+    const { SKULL_TOP } = await import('./outfits.js');
+    const { createVehicle, SPECS } = await import('./vehicle.js');
+
+    const h = createHumanoid(look());
+    h.root.position.set(0, 0, 0);
+    const sit = () => { for (let i = 0; i < 150; i++) poseHumanoid(h, {
+      dt: 1 / 60, t: 0, speed: 0, runSpeed: 6, grounded: true, airVy: 0, aiming: false,
+      aimPitch: 0, dead: 0, seated: true, punch: 0, flinch: 0, steer: 0 }); };
+    sit();
+    h.root.updateMatrixWorld(true);
+    const bone = (n) => h.root.children[0].getObjectByName(n).getWorldPosition(V()).y;
+    const hip = bone('DEF-hips');
+    const head = bone('DEF-head') + SKULL_TOP.animated;
+
+    ok(Math.abs(hip - ANIMATED_SEATED.hip) < 0.01,
+      `a seated driver's hips are ${hip.toFixed(3)}m up, matching the measured constant`);
+    ok(Math.abs(head - ANIMATED_SEATED.head) < 0.01,
+      `and the top of their head ${head.toFixed(3)}m, matching too`);
+    ok(Math.abs(ANIMATED_SEATED.hip - CAPSULE_SEATED.hip) > 0.2,
+      `the two rigs really do disagree, by ${((CAPSULE_SEATED.hip - ANIMATED_SEATED.hip) * 100).toFixed(0)}cm at `
+      + 'the hip — which is why one set of numbers for both put the driver through the floor');
+    ok(seatMetrics(h) === ANIMATED_SEATED, 'and a mannequin reports the mannequin\'s numbers');
+
+    // Now every car, on the rig that ships: head under the roof, backside on the seat.
+    const seatHeight = (v, m) => {
+      let y = v.spec.seat[1] - m.hip;
+      const roof = v.spec.height - 0.1;
+      if (y + m.head > roof) y -= y + m.head - roof;
+      return y;
+    };
+    const wrong = [];
+    for (const kind of Object.keys(SPECS)) {
+      const v = createVehicle(kind, 0xcccccc);
+      const y = seatHeight(v, ANIMATED_SEATED);
+      const headTop = y + ANIMATED_SEATED.head;
+      const hipY = y + ANIMATED_SEATED.hip;
+      // Sinking into the seat is the mechanism, not a fault — these cabins are smaller
+      // than a 1.48m seated mannequin. What matters is the two ends of it: the head must
+      // not come through the roof, and must not disappear so far down that the driver is
+      // no longer framed in his own window.
+      if (headTop > v.spec.height) wrong.push(`${kind}: head ${((headTop - v.spec.height) * 100) | 0}cm through the roof`);
+      // Measured from the seat, not the roofline: spec.height on the Bedford is 3.7m of
+      // painted cargo crown, nothing to do with how much headroom the cab has.
+      const sitUp = headTop - v.spec.seat[1];
+      if (sitUp < 0.5) wrong.push(`${kind}: head only ${(sitUp * 100) | 0}cm above the seat — lying in the footwell`);
+      void hipY;
+    }
+    ok(!wrong.length,
+      `in all ${Object.keys(SPECS).length} vehicles the driver's head clears the roof and he is `
+      + 'sitting up in the seat rather than lying in the footwell', wrong.join('; '));
+  }
+
   /* -- clothing that hangs off the chest ---------------------------------------------- */
   {
     const cop = createHumanoid({ ...look(), outfit: 'police' });

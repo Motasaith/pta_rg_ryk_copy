@@ -19,7 +19,8 @@ import {
 import { PoliceOps } from './police';
 import { JOB_NAME, jobFor, Jobs } from './jobs';
 import {
-  createHumanoid, disposeHumanoid, Humanoid, poseHumanoid, setHumanoidDetail, SKINS,
+  createHumanoid, disposeHumanoid, Humanoid, poseHumanoid, seatMetrics, setHumanoidDetail, SKINS,
+  type SeatMetrics,
 } from './humanoid';
 import { Ped, PedManager } from './peds';
 import { initCharacters } from './characters';
@@ -44,23 +45,23 @@ import {
 } from './vehicle';
 
 /** Where the hips sit in the seated pose, and how far the top of the head is above them. */
-const SEATED_HIP = 0.91;
-const SEATED_HEAD = 0.74;
-
 /**
  * Where to put a seated character's root inside a car body.
  *
- * This used to be a hand-tuned drop per vehicle class, and it did not survive contact
- * with the low cars: a hypercar roof is 1.14m and the table put the top of the head at
- * 1.30m, so the driver's head was outside the car. Derive it instead — sit the hips on
- * the seat, then, if the head would still clip the roof, sink the whole body until it
- * does not. Every car is right by construction, including any added later.
+ * This used to be a hand-tuned drop per vehicle class, and it did not survive contact with
+ * the low cars: a hypercar roof is 1.14m and the table put the top of the head at 1.30m,
+ * so the driver's head was outside the car. Derived instead — sit the hips on the seat,
+ * then, if the head would still clip the roof, sink the whole body until it does not.
+ *
+ * The second thing it did not survive was having two rigs. The numbers were the capsule
+ * fallback's, and the mannequin that actually ships folds up 37cm more compactly when it
+ * sits, so every driver was planted a foot below their own seat with their legs through
+ * the floor pan. `seatMetrics` asks the character instead of assuming.
  */
-function seatHeight(v: Vehicle): number {
-  let y = v.spec.seat[1] - SEATED_HIP;
-  const headTop = y + SEATED_HIP + SEATED_HEAD;
+function seatHeight(v: Vehicle, m: SeatMetrics): number {
+  let y = v.spec.seat[1] - m.hip;
   const roof = v.spec.height - 0.1;
-  if (headTop > roof) y -= headTop - roof;
+  if (y + m.head > roof) y -= y + m.head - roof;
   return y;
 }
 
@@ -1373,7 +1374,7 @@ export class Game {
     this.vehicle = v;
     this.hero.root.removeFromParent();
     v.bodyPivot.add(this.hero.root);
-    this.hero.root.position.set(v.spec.seat[0], seatHeight(v), v.spec.seat[2]);
+    this.hero.root.position.set(v.spec.seat[0], seatHeight(v, seatMetrics(this.hero)), v.spec.seat[2]);
     this.hero.root.rotation.set(0, 0, 0);
     this.audio.carDoorSlam();
     this.audio.engineOn();
@@ -1449,7 +1450,7 @@ export class Game {
     this.pz = bail ? spot[1] : this.tmp2.z;
     this.py = bail
       ? this.phys.groundHeight(spot[0], spot[1], PLAYER_R, v.y + 1.5)
-      : v.y + seatHeight(v);
+      : v.y + seatHeight(v, seatMetrics(this.hero));
     this.vx = 0; this.vz = 0; this.vy = 0;
     this.grounded = true;
     v.isPlayer = false;
@@ -1507,7 +1508,7 @@ export class Game {
     const groundY = this.phys.groundHeight(door.x, door.z, PLAYER_R, v.y + 1.6);
     // seatWorld already carries the local-X-is-the-car's-left negation; do not re-derive it
     seatWorld(v, this.tmp2);
-    const seat = { x: this.tmp2.x, y: v.y + seatHeight(v), z: this.tmp2.z };
+    const seat = { x: this.tmp2.x, y: v.y + seatHeight(v, seatMetrics(this.hero)), z: this.tmp2.z };
     const pose = m.out
       ? exitPose(m.t, seat, door, groundY, m.spot, v.yaw, m.side)
       : enterPose(m.t, m.from, door, groundY, seat, v.yaw, m.side, m.stepT);
@@ -2403,7 +2404,16 @@ export class Game {
     } else if (!this.dead) {
       const v = this.traffic.nearest(this.px, this.pz, 3.6);
       const shop = this.nearestShop();
-      if (v && Math.abs(v.speed) < 6) {
+      const home = this.nearestHome();
+      // Whichever is actually nearer, rather than a fixed order. A car parked across your
+      // own front door used to win outright, so the door simply stopped working — which is
+      // exactly where people park.
+      const carD = v ? dist2(v.x, v.z, this.px, this.pz) : Infinity;
+      const doorD = Math.min(
+        shop ? dist2(shop.x, shop.z, this.px, this.pz) : Infinity,
+        home ? dist2(home.x, home.z, this.px, this.pz) : Infinity,
+      );
+      if (v && Math.abs(v.speed) < 6 && carD <= doorD) {
         const isOccupied = v.ai !== null || v.driver !== null;
         text = isOccupied
           ? `E — hijack the ${v.spec.name.toLowerCase()}`
@@ -2411,12 +2421,13 @@ export class Game {
         this.promptAction = isOccupied
           ? () => this.hijackVehicle(v)
           : () => this.enterVehicle(v);
-      } else if (shop) {
+      } else if (shop && dist2(shop.x, shop.z, this.px, this.pz) <= doorD) {
         text = `E — go into ${shop.name}`;
         this.promptAction = () => this.enterInterior(shop.kind, shop.name);
-      } else if (dist2(this.city.playerStart.x, this.city.playerStart.z, this.px, this.pz) < 3.2 * 3.2) {
-        text = 'E — go inside';
-        this.promptAction = () => this.enterInterior('home', 'HOME');
+      } else if (home) {
+        const mine = dist2(home.x, home.z, this.city.playerStart.x, this.city.playerStart.z) < 1;
+        text = mine ? 'E — go inside' : 'E — let yourself in';
+        this.promptAction = () => this.enterInterior('home', mine ? 'HOME' : 'A HOUSE');
       }
     }
 
@@ -2601,6 +2612,23 @@ export class Game {
     this.toast('Changed your shirt');
   }
 
+  /**
+   * The nearest front door you could walk through.
+   *
+   * There used to be exactly one, at whichever plot the player spawned on, so every other
+   * house on a street of a hundred was scenery. They all open now — the same room behind
+   * each, which is how the shops work too.
+   */
+  private nearestHome(): { x: number; z: number } | null {
+    let best: { x: number; z: number } | null = null;
+    let bd = 3.4 * 3.4;
+    for (const h of this.city.homes) {
+      const d = dist2(h.x, h.z, this.px, this.pz);
+      if (d < bd) { bd = d; best = h; }
+    }
+    return best;
+  }
+
   private nearestShop(): Shop | null {
     let best: Shop | null = null;
     let bd = 3.5 * 3.5;
@@ -2724,6 +2752,7 @@ export class Game {
     { codes: ['TAKEMETOTHEPUL', 'GOTOBRIDGE'], label: 'AT THE BRIDGE', hint: 'jump to the big bridge' },
     { codes: ['TAKEMEHOME', 'GOHOME'], label: 'BACK AT HOME', hint: 'jump to your front door' },
     { codes: ['TAKEMETOSPRAY', 'GOTOGARAGE'], label: "AT THE PAY 'N' SPRAY", hint: 'jump to a respray bay' },
+    { codes: ['TAKEMETOSHOP', 'GOSHOPPING'], label: 'AT THE SHOP', hint: 'jump to the nearest shop' },
     { codes: ['SCATTERSTORM', 'MAKEITRAIN'], label: 'MONSOON', hint: 'bring the rain' },
     { codes: ['ANDYELLOWSKY', 'DUSTUP'], label: 'DUST HAZE', hint: 'bring the dust' },
     { codes: ['BLUESKIES', 'CLEARUP'], label: 'CLEAR SKIES', hint: 'clear the weather' },
@@ -2889,6 +2918,21 @@ export class Game {
         this.startHour = entry.codes[0] === 'DOPEHER' ? 12 : 0;
         this.sky.setHour(this.startHour);
         break;
+      case 'TAKEMETOSHOP': {
+        // The counterpart to TAKEMETOSPRAY, and the same reasoning: the shops are spread
+        // right across the city and the nearest one to where you start is 350m away, so
+        // without this the only way to see the inside of one is a long walk.
+        let shop = this.city.shops[0];
+        let sd = Infinity;
+        for (const s of this.city.shops) {
+          const d = dist2(s.x, s.z, this.px, this.pz);
+          if (d < sd) { sd = d; shop = s; }
+        }
+        if (!shop) { label = 'NO SHOPS ON THIS MAP'; break; }
+        this.warp(shop.x, shop.z);
+        label = `AT ${shop.name}`;
+        break;
+      }
       case 'TAKEMETOSPRAY': {
         // Just outside the bay, facing in, so the warp lands you on the forecourt rather
         // than inside the shop with the respray already triggered.

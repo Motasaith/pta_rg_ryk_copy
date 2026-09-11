@@ -53,6 +53,14 @@ type Band =
 
 export interface SchemeResult {
   home: { x: number; z: number; yaw: number };
+  /**
+   * Every built house's front door.
+   *
+   * `home` alone used to be the only enterable door in the entire map — one point, with a
+   * 3.2m radius, at the plot the player happens to spawn on. Walking up to any other house
+   * did nothing, which is a strange thing for a street of a hundred houses to do.
+   */
+  homes: { x: number; z: number; yaw: number }[];
   parkCentre: { x: number; z: number };
   south: number;
   plots: number;
@@ -149,6 +157,7 @@ export function buildScheme(
 
   let plotNo = 1;
   let home: SchemeResult['home'] | null = null;
+  const homes: SchemeResult['homes'] = [];
   const homeTarget = 34;   // the plot the player calls theirs
 
   for (const band of bands) {
@@ -192,6 +201,7 @@ export function buildScheme(
           cx, w, front, back: backZ, face: band.face, no, vacant, boardMat, preset,
         });
         if (no === homeTarget) home = res;
+        if (!vacant) homes.push(res);
       }
     }
   }
@@ -318,6 +328,7 @@ export function buildScheme(
 
   return {
     home: home ?? { x: SCHEME_BLVD + 12, z: parkZ - 40, yaw: 0 },
+    homes,
     parkCentre: { x: 60, z: parkZ },
     south,
     plots: plotNo - 1,

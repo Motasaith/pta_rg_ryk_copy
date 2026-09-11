@@ -109,6 +109,8 @@ export interface City {
   itemSpots: { x: number; y: number; z: number }[];
   pickupSpots: { x: number; z: number }[];
   playerStart: { x: number; z: number; yaw: number };
+  /** Every front door that opens. One of them is the player's own. */
+  homes: { x: number; z: number }[];
   policeStation: { x: number; z: number };
   hospital: { x: number; z: number };
   bounds: WorldBounds;

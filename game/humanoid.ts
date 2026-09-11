@@ -4,6 +4,7 @@ import { clamp, damp, lerp, TAU } from './mathx';
 import { animatedHumansAvailable, createAnimatedHumanoid, disposeAnimatedHumanoid, poseAnimated, AnimatedHumanoid } from './characters';
 import { buildOutfit, defaultHat, SKULL_TOP, type Hat, type Outfit } from './outfits';
 import { applyWorldRotation, makeTwoBone, solveTwoBone } from './ik';
+import { ANIMATED_SEATED } from './characters';
 
 /**
  * A jointed humanoid built from capsules, with proportions taken from a 1.78m adult:
@@ -321,6 +322,22 @@ export interface PoseInput {
 }
 
 /** Drives every joint. Called once per frame per visible character. */
+/** Hip height and skull top of a seated character, above their root. */
+export interface SeatMetrics { hip: number; head: number }
+
+/** The capsule rig's own proportions, which is what the seating code used to assume. */
+export const CAPSULE_SEATED: SeatMetrics = { hip: 0.91, head: 1.65 };
+
+/**
+ * How this particular character folds up when they sit down.
+ *
+ * Ask, do not assume: the two rigs differ by 37cm at the hip, and using one set of numbers
+ * for both put every driver of the shipping rig a foot too low in their seat.
+ */
+export function seatMetrics(h: Humanoid): SeatMetrics {
+  return (h as AnimatedHumanoid).mixer ? ANIMATED_SEATED : CAPSULE_SEATED;
+}
+
 export function poseHumanoid(h: Humanoid, p: PoseInput): void {
   if ((h as AnimatedHumanoid).mixer) {
     poseAnimated(h as AnimatedHumanoid, p);
